@@ -1,0 +1,728 @@
+--[[
+    ═══════════════════════════════════════════════════════════════
+    AVATAR CHANGER SYSTEM - CLIENT SIDE
+    ═══════════════════════════════════════════════════════════════
+    Author: ItoRenz00
+    Description: Modern avatar selector UI
+    Location: StarterPlayer > StarterPlayerScripts
+    ═══════════════════════════════════════════════════════════════
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Player = Players.LocalPlayer
+
+local RemoteEvent = ReplicatedStorage:WaitForChild("ChangeAvatar", 10)
+if not RemoteEvent then
+    warn("❌ ChangeAvatar RemoteEvent tidak ditemukan!")
+    return
+end
+
+local AvatarData = {Boy = {}, Girl = {}}
+local CurrentTab = "Boy"
+local CurrentIndex = 1
+local isChanging = false
+local isLoading = true
+local isPanelOpen = false
+local isTweening = false
+
+local TWEEN_INFO = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+local TAB_COLORS = {
+    Boy = Color3.fromRGB(100, 150, 255),
+    Girl = Color3.fromRGB(255, 100, 180)
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- UTILITY FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+local function getCurrentAvatarList()
+    return AvatarData[CurrentTab]
+end
+
+local function loadAvatarDataFromServer()
+    local AvatarStorage = ReplicatedStorage:WaitForChild("AvatarStorage", 30)
+    if not AvatarStorage then return false end
+    
+    local dataReady = AvatarStorage:WaitForChild("DataReady", 60)
+    if not dataReady or not dataReady.Value then return false end
+    
+    local BoyFolder = AvatarStorage:WaitForChild("Boy", 5)
+    local GirlFolder = AvatarStorage:WaitForChild("Girl", 5)
+    if not BoyFolder or not GirlFolder then return false end
+
+    AvatarData.Boy = {}
+    for _, value in ipairs(BoyFolder:GetChildren()) do
+        if value:IsA("IntValue") then
+            table.insert(AvatarData.Boy, {Username = value.Name, UserId = value.Value})
+        end
+    end
+    
+    AvatarData.Girl = {}
+    for _, value in ipairs(GirlFolder:GetChildren()) do
+        if value:IsA("IntValue") then
+            table.insert(AvatarData.Girl, {Username = value.Name, UserId = value.Value})
+        end
+    end
+    
+    return true
+end
+
+local function updatePreview(screenGui)
+    local frame = screenGui:FindFirstChild("MainFrame")
+    if not frame then return end
+
+    local avatarList = getCurrentAvatarList()
+    if #avatarList == 0 then return end
+
+    local avatar = avatarList[CurrentIndex]
+    if not avatar or not avatar.UserId then return end
+
+    local avatarImage = frame:FindFirstChild("AvatarImage", true)
+    if avatarImage then
+        local thumbnailUrl = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. tostring(avatar.UserId) .. "&width=420&height=420&format=png"
+        avatarImage.Image = thumbnailUrl
+    end
+
+    local counterLabel = frame:FindFirstChild("CounterLabel", true)
+    if counterLabel then
+        counterLabel.Text = CurrentIndex .. "/" .. #avatarList
+    end
+end
+
+local function updateTabVisuals(screenGui, activeTab)
+    local frame = screenGui:FindFirstChild("MainFrame")
+    if not frame then return end
+    
+    local tabContainer = frame:FindFirstChild("TabContainer")
+    if not tabContainer then return end
+    
+    local boyTab = tabContainer:FindFirstChild("BoyTab")
+    local girlTab = tabContainer:FindFirstChild("GirlTab")
+    
+    local content = frame:FindFirstChild("Content")
+    local counterBadge = content and content:FindFirstChild("PreviewContainer") and content:FindFirstChild("PreviewContainer"):FindFirstChild("CounterBadge")
+    local actionContainer = content and content:FindFirstChild("ActionContainer")
+    local applyButton = actionContainer and actionContainer:FindFirstChild("ApplyButton")
+    local resetButton = actionContainer and actionContainer:FindFirstChild("ResetButton")
+    
+    local activeColor = TAB_COLORS[activeTab]
+    
+    if activeTab == "Boy" then
+        if boyTab then
+            boyTab.BackgroundColor3 = TAB_COLORS.Boy
+            boyTab.BackgroundTransparency = 0.15
+            boyTab.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end
+        if girlTab then
+            girlTab.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+            girlTab.BackgroundTransparency = 0.5
+            girlTab.TextColor3 = Color3.fromRGB(200, 200, 200)
+        end
+    else
+        if girlTab then
+            girlTab.BackgroundColor3 = TAB_COLORS.Girl
+            girlTab.BackgroundTransparency = 0.15
+            girlTab.TextColor3 = Color3.fromRGB(255, 255, 255)
+        end
+        if boyTab then
+            boyTab.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+            boyTab.BackgroundTransparency = 0.5
+            boyTab.TextColor3 = Color3.fromRGB(200, 200, 200)
+        end
+    end
+    
+    if counterBadge then
+        counterBadge.BackgroundColor3 = activeColor
+    end
+    if applyButton then
+        applyButton.BackgroundColor3 = activeColor
+        local applyStroke = applyButton:FindFirstChild("ApplyStroke")
+        if applyStroke then
+            applyStroke.Color = activeColor
+        end
+    end
+    if resetButton then
+        local resetStroke = resetButton:FindFirstChild("ResetStroke")
+        if resetStroke then
+            resetStroke.Color = activeColor
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- UI ACTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+local function switchTab(screenGui, newTab)
+    if CurrentTab == newTab or isLoading then return end
+    CurrentTab = newTab
+    CurrentIndex = 1
+    updatePreview(screenGui)
+    updateTabVisuals(screenGui, newTab)
+end
+
+local function togglePanel(screenGui)
+    local frame = screenGui:FindFirstChild("MainFrame")
+    local toggleButton = screenGui:FindFirstChild("ToggleButton")
+    if not frame or not toggleButton then return end
+    if isTweening then return end
+    
+    isTweening = true
+    isPanelOpen = not isPanelOpen
+    
+    local framePosTarget, togglePosTarget
+    if isPanelOpen then
+        framePosTarget = isMobile and UDim2.new(0, 8, 0, 68) or UDim2.new(0, 15, 0, 68)
+        togglePosTarget = isMobile and UDim2.new(0, 241, 0, 68) or UDim2.new(0, 358, 0, 68)
+        toggleButton.Text = "X"
+        toggleButton.Font = Enum.Font.GothamBold
+    else
+        framePosTarget = isMobile and UDim2.new(-1, 8, 0, 68) or UDim2.new(-1, 15, 0, 68)
+        togglePosTarget = isMobile and UDim2.new(0, 8, 0, 68) or UDim2.new(0, 15, 0, 68)
+        toggleButton.Text = "👤"
+        toggleButton.Font = Enum.Font.GothamBold
+    end
+    
+    local frameTween = TweenService:Create(frame, TWEEN_INFO, {Position = framePosTarget})
+    local toggleTween = TweenService:Create(toggleButton, TWEEN_INFO, {Position = togglePosTarget})
+    
+    frameTween:Play()
+    toggleTween:Play()
+    
+    frameTween.Completed:Connect(function()
+        isTweening = false
+    end)
+end
+
+local function changeAvatar(userId)
+    if isChanging then return end
+    if not userId then return end
+    isChanging = true
+    RemoteEvent:FireServer(userId)
+    task.spawn(function()
+        task.wait(0.5)
+        isChanging = false
+    end)
+end
+
+local function resetAvatar()
+    if isChanging then return end
+    isChanging = true
+    RemoteEvent:FireServer(Player.UserId)
+    task.spawn(function()
+        task.wait(0.5)
+        isChanging = false
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- UI CREATION
+-- ═══════════════════════════════════════════════════════════════
+
+local function createUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "AvatarChangerUI"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.IgnoreGuiInset = true
+    ScreenGui.Parent = Player:WaitForChild("PlayerGui")
+
+    local ToggleButton = Instance.new("TextButton")
+    ToggleButton.Name = "ToggleButton"
+    ToggleButton.Size = isMobile and UDim2.new(0, 28, 0, 28) or UDim2.new(0, 32, 0, 32)
+    ToggleButton.Position = isMobile and UDim2.new(0, 8, 0, 68) or UDim2.new(0, 15, 0, 68)
+    ToggleButton.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+    ToggleButton.BackgroundTransparency = 0.2
+    ToggleButton.BorderSizePixel = 0
+    ToggleButton.Text = "👤"
+    ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ToggleButton.Font = Enum.Font.GothamBold
+    ToggleButton.TextSize = isMobile and 14 or 18
+    ToggleButton.AutoButtonColor = false
+    ToggleButton.ZIndex = 10
+    ToggleButton.Parent = ScreenGui
+
+    local ToggleCorner = Instance.new("UICorner")
+    ToggleCorner.CornerRadius = UDim.new(0, 8)
+    ToggleCorner.Parent = ToggleButton
+
+    local ToggleStroke = Instance.new("UIStroke")
+    ToggleStroke.Color = Color3.fromRGB(100, 150, 255)
+    ToggleStroke.Transparency = 0.5
+    ToggleStroke.Thickness = 1.5
+    ToggleStroke.Parent = ToggleButton
+
+    local Frame = Instance.new("Frame")
+    Frame.Name = "MainFrame"
+    Frame.Size = isMobile and UDim2.new(0, 230, 0, 242) or UDim2.new(0, 340, 0, 303)
+    Frame.Position = isMobile and UDim2.new(-1, 8, 0, 68) or UDim2.new(-1, 15, 0, 68)
+    Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    Frame.BackgroundTransparency = 0.5
+    Frame.BorderSizePixel = 0
+    Frame.ClipsDescendants = true
+    Frame.Parent = ScreenGui
+
+    local MainCorner = Instance.new("UICorner")
+    MainCorner.CornerRadius = UDim.new(0, 12)
+    MainCorner.Parent = Frame
+
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color = Color3.fromRGB(255, 255, 255)
+    Stroke.Transparency = 0.85
+    Stroke.Thickness = 1.5
+    Stroke.Parent = Frame
+
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Size = UDim2.new(1, 0, 0, isMobile and 26 or 32)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(5, 5, 10)
+    TitleBar.BackgroundTransparency = 0.3
+    TitleBar.BorderSizePixel = 0
+    TitleBar.ZIndex = 2
+    TitleBar.Parent = Frame
+
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.CornerRadius = UDim.new(0, 12)
+    TitleCorner.Parent = TitleBar
+
+    local TitleStroke = Instance.new("UIStroke")
+    TitleStroke.Color = Color3.fromRGB(255, 255, 255)
+    TitleStroke.Transparency = 0.9
+    TitleStroke.Thickness = 1
+    TitleStroke.Parent = TitleBar
+
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1, -16, 1, 0)
+    Title.Position = UDim2.new(0, 8, 0, 0)
+    Title.BackgroundTransparency = 1
+    Title.Text = "AVATAR SELECTOR"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = isMobile and 9 or 12
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+    Title.ZIndex = 2
+    Title.Parent = TitleBar
+
+    local TabContainer = Instance.new("Frame")
+    TabContainer.Name = "TabContainer"
+    TabContainer.Size = UDim2.new(1, -16, 0, isMobile and 24 or 30)
+    TabContainer.Position = UDim2.new(0, 8, 0, isMobile and 30 or 36)
+    TabContainer.BackgroundTransparency = 1
+    TabContainer.BorderSizePixel = 0
+    TabContainer.ZIndex = 3
+    TabContainer.Parent = Frame
+
+    local BoyTab = Instance.new("TextButton")
+    BoyTab.Name = "BoyTab"
+    BoyTab.Size = UDim2.new(0.5, -4, 1, 0)
+    BoyTab.Position = UDim2.new(0, 0, 0, 0)
+    BoyTab.BackgroundColor3 = TAB_COLORS.Boy
+    BoyTab.BackgroundTransparency = 0.15
+    BoyTab.BorderSizePixel = 0
+    BoyTab.Text = "BOY"
+    BoyTab.TextColor3 = Color3.fromRGB(255, 255, 255)
+    BoyTab.Font = Enum.Font.GothamBold
+    BoyTab.TextSize = isMobile and 8 or 11
+    BoyTab.AutoButtonColor = false
+    BoyTab.ZIndex = 4
+    BoyTab.Parent = TabContainer
+
+    local BoyTabCorner = Instance.new("UICorner")
+    BoyTabCorner.CornerRadius = UDim.new(0, 6)
+    BoyTabCorner.Parent = BoyTab
+
+    local BoyTabStroke = Instance.new("UIStroke")
+    BoyTabStroke.Name = "TabStroke"
+    BoyTabStroke.Color = TAB_COLORS.Boy
+    BoyTabStroke.Transparency = 0.5
+    BoyTabStroke.Thickness = 1.5
+    BoyTabStroke.Parent = BoyTab
+
+    local GirlTab = Instance.new("TextButton")
+    GirlTab.Name = "GirlTab"
+    GirlTab.Size = UDim2.new(0.5, -4, 1, 0)
+    GirlTab.Position = UDim2.new(0.5, 4, 0, 0)
+    GirlTab.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    GirlTab.BackgroundTransparency = 0.5
+    GirlTab.BorderSizePixel = 0
+    GirlTab.Text = "GIRL"
+    GirlTab.TextColor3 = Color3.fromRGB(200, 200, 200)
+    GirlTab.Font = Enum.Font.GothamBold
+    GirlTab.TextSize = isMobile and 8 or 11
+    GirlTab.AutoButtonColor = false
+    GirlTab.ZIndex = 4
+    GirlTab.Parent = TabContainer
+
+    local GirlTabCorner = Instance.new("UICorner")
+    GirlTabCorner.CornerRadius = UDim.new(0, 6)
+    GirlTabCorner.Parent = GirlTab
+
+    local GirlTabStroke = Instance.new("UIStroke")
+    GirlTabStroke.Name = "TabStroke"
+    GirlTabStroke.Color = Color3.fromRGB(255, 255, 255)
+    GirlTabStroke.Transparency = 0.88
+    GirlTabStroke.Thickness = 1
+    GirlTabStroke.Parent = GirlTab
+
+    local LoadingContainer = Instance.new("Frame")
+    LoadingContainer.Name = "LoadingContainer"
+    LoadingContainer.Size = UDim2.new(1, 0, 1, isMobile and -58 or -70)
+    LoadingContainer.Position = UDim2.new(0, 0, 0, isMobile and 58 or 70)
+    LoadingContainer.BackgroundTransparency = 1
+    LoadingContainer.BorderSizePixel = 0
+    LoadingContainer.Visible = true
+    LoadingContainer.ZIndex = 8
+    LoadingContainer.Parent = Frame
+
+    local LoadingLabel = Instance.new("TextLabel")
+    LoadingLabel.Size = UDim2.new(1, -32, 0, 40)
+    LoadingLabel.Position = UDim2.new(0, 16, 0.5, -20)
+    LoadingLabel.BackgroundTransparency = 1
+    LoadingLabel.Text = "Loading Avatars..."
+    LoadingLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    LoadingLabel.Font = Enum.Font.GothamMedium
+    LoadingLabel.TextSize = isMobile and 10 or 13
+    LoadingLabel.ZIndex = 9
+    LoadingLabel.Parent = LoadingContainer
+
+    local LoadingSubtext = Instance.new("TextLabel")
+    LoadingSubtext.Size = UDim2.new(1, -32, 0, 20)
+    LoadingSubtext.Position = UDim2.new(0, 16, 0.5, 20)
+    LoadingSubtext.BackgroundTransparency = 1
+    LoadingSubtext.Text = "Please wait..."
+    LoadingSubtext.TextColor3 = Color3.fromRGB(150, 150, 150)
+    LoadingSubtext.Font = Enum.Font.Gotham
+    LoadingSubtext.TextSize = isMobile and 8 or 10
+    LoadingSubtext.ZIndex = 9
+    LoadingSubtext.Parent = LoadingContainer
+
+    local Content = Instance.new("Frame")
+    Content.Name = "Content"
+    Content.Size = UDim2.new(1, -16, 1, isMobile and -62 or -74)
+    Content.Position = UDim2.new(0, 8, 0, isMobile and 58 or 70)
+    Content.BackgroundTransparency = 1
+    Content.BorderSizePixel = 0
+    Content.Visible = false
+    Content.ZIndex = 5
+    Content.Parent = Frame
+
+    local PreviewContainer = Instance.new("Frame")
+    PreviewContainer.Name = "PreviewContainer"
+    PreviewContainer.Size = UDim2.new(1, 0, 0, isMobile and 110 or 145)
+    PreviewContainer.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    PreviewContainer.BackgroundTransparency = 0.5
+    PreviewContainer.BorderSizePixel = 0
+    PreviewContainer.ZIndex = 6
+    PreviewContainer.Parent = Content
+
+    local PreviewCorner = Instance.new("UICorner")
+    PreviewCorner.CornerRadius = UDim.new(0, 8)
+    PreviewCorner.Parent = PreviewContainer
+
+    local PreviewStroke = Instance.new("UIStroke")
+    PreviewStroke.Color = Color3.fromRGB(255, 255, 255)
+    PreviewStroke.Transparency = 0.88
+    PreviewStroke.Thickness = 1
+    PreviewStroke.Parent = PreviewContainer
+
+    local AvatarImage = Instance.new("ImageLabel")
+    AvatarImage.Name = "AvatarImage"
+    AvatarImage.Size = UDim2.new(1, -10, 1, -10)
+    AvatarImage.Position = UDim2.new(0, 5, 0, 5)
+    AvatarImage.BackgroundTransparency = 1
+    AvatarImage.Image = ""
+    AvatarImage.ScaleType = Enum.ScaleType.Fit
+    AvatarImage.ZIndex = 7
+    AvatarImage.Parent = PreviewContainer
+
+    local ImageCorner = Instance.new("UICorner")
+    ImageCorner.CornerRadius = UDim.new(0, 6)
+    ImageCorner.Parent = AvatarImage
+
+    local CounterBadge = Instance.new("Frame")
+    CounterBadge.Name = "CounterBadge"
+    CounterBadge.Size = UDim2.new(0, isMobile and 40 or 50, 0, isMobile and 18 or 24)
+    CounterBadge.Position = UDim2.new(1, isMobile and -44 or -54, 0, 5)
+    CounterBadge.BackgroundColor3 = TAB_COLORS.Boy
+    CounterBadge.BackgroundTransparency = 0.5
+    CounterBadge.BorderSizePixel = 0
+    CounterBadge.ZIndex = 8
+    CounterBadge.Parent = PreviewContainer
+
+    local CounterCorner = Instance.new("UICorner")
+    CounterCorner.CornerRadius = UDim.new(0, 5)
+    CounterCorner.Parent = CounterBadge
+
+    local CounterStroke = Instance.new("UIStroke")
+    CounterStroke.Name = "CounterStroke"
+    CounterStroke.Color = TAB_COLORS.Boy
+    CounterStroke.Transparency = 0.5
+    CounterStroke.Thickness = 1.5
+    CounterStroke.Parent = CounterBadge
+
+    local CounterLabel = Instance.new("TextLabel")
+    CounterLabel.Name = "CounterLabel"
+    CounterLabel.Size = UDim2.new(1, 0, 1, 0)
+    CounterLabel.BackgroundTransparency = 1
+    CounterLabel.Text = "1/0"
+    CounterLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CounterLabel.Font = Enum.Font.GothamBold
+    CounterLabel.TextSize = isMobile and 7 or 10
+    CounterLabel.ZIndex = 9
+    CounterLabel.Parent = CounterBadge
+
+    local buttonHeight = isMobile and 26 or 34
+
+    local NavContainer = Instance.new("Frame")
+    NavContainer.Name = "NavContainer"
+    NavContainer.Size = UDim2.new(1, 0, 0, buttonHeight)
+    NavContainer.Position = UDim2.new(0, 0, 0, isMobile and 115 or 150)
+    NavContainer.BackgroundTransparency = 1
+    NavContainer.BorderSizePixel = 0
+    NavContainer.ZIndex = 6
+    NavContainer.Parent = Content
+
+    local PrevButton = Instance.new("TextButton")
+    PrevButton.Name = "PrevButton"
+    PrevButton.Size = UDim2.new(0.5, -2, 1, 0)
+    PrevButton.Position = UDim2.new(0, 0, 0, 0)
+    PrevButton.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    PrevButton.BackgroundTransparency = 0.3
+    PrevButton.BorderSizePixel = 0
+    PrevButton.Text = "← PREV"
+    PrevButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    PrevButton.Font = Enum.Font.GothamBold
+    PrevButton.TextSize = isMobile and 7 or 10
+    PrevButton.AutoButtonColor = false
+    PrevButton.ZIndex = 7
+    PrevButton.Parent = NavContainer
+
+    local PrevCorner = Instance.new("UICorner")
+    PrevCorner.CornerRadius = UDim.new(0, 6)
+    PrevCorner.Parent = PrevButton
+
+    local PrevStroke = Instance.new("UIStroke")
+    PrevStroke.Color = Color3.fromRGB(255, 255, 255)
+    PrevStroke.Transparency = 0.88
+    PrevStroke.Thickness = 1
+    PrevStroke.Parent = PrevButton
+
+    local NextButton = Instance.new("TextButton")
+    NextButton.Name = "NextButton"
+    NextButton.Size = UDim2.new(0.5, -2, 1, 0)
+    NextButton.Position = UDim2.new(0.5, 2, 0, 0)
+    NextButton.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    NextButton.BackgroundTransparency = 0.3
+    NextButton.BorderSizePixel = 0
+    NextButton.Text = "NEXT →"
+    NextButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    NextButton.Font = Enum.Font.GothamBold
+    NextButton.TextSize = isMobile and 7 or 10
+    NextButton.AutoButtonColor = false
+    NextButton.ZIndex = 7
+    NextButton.Parent = NavContainer
+
+    local NextCorner = Instance.new("UICorner")
+    NextCorner.CornerRadius = UDim.new(0, 6)
+    NextCorner.Parent = NextButton
+
+    local NextStroke = Instance.new("UIStroke")
+    NextStroke.Color = Color3.fromRGB(255, 255, 255)
+    NextStroke.Transparency = 0.88
+    NextStroke.Thickness = 1
+    NextStroke.Parent = NextButton
+
+    local actionButtonHeight = isMobile and 28 or 36
+    local ActionContainer = Instance.new("Frame")
+    ActionContainer.Name = "ActionContainer"
+    ActionContainer.Size = UDim2.new(1, 0, 0, actionButtonHeight)
+    ActionContainer.Position = UDim2.new(0, 0, 0, isMobile and 146 or 189)
+    ActionContainer.BackgroundTransparency = 1
+    ActionContainer.BorderSizePixel = 0
+    ActionContainer.ZIndex = 6
+    ActionContainer.Parent = Content
+
+    local ResetButton = Instance.new("TextButton")
+    ResetButton.Name = "ResetButton"
+    ResetButton.Size = UDim2.new(0.4, -2, 1, 0)
+    ResetButton.Position = UDim2.new(0, 0, 0, 0)
+    ResetButton.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+    ResetButton.BackgroundTransparency = 0.2
+    ResetButton.BorderSizePixel = 0
+    ResetButton.Text = "RESET"
+    ResetButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ResetButton.Font = Enum.Font.GothamBold
+    ResetButton.TextSize = isMobile and 8 or 11
+    ResetButton.AutoButtonColor = false
+    ResetButton.ZIndex = 7
+    ResetButton.Parent = ActionContainer
+
+    local ResetCorner = Instance.new("UICorner")
+    ResetCorner.CornerRadius = UDim.new(0, 7)
+    ResetCorner.Parent = ResetButton
+
+    local ResetStroke = Instance.new("UIStroke")
+    ResetStroke.Name = "ResetStroke"
+    ResetStroke.Color = TAB_COLORS.Boy
+    ResetStroke.Transparency = 0.5
+    ResetStroke.Thickness = 1.5
+    ResetStroke.Parent = ResetButton
+
+    local ApplyButton = Instance.new("TextButton")
+    ApplyButton.Name = "ApplyButton"
+    ApplyButton.Size = UDim2.new(0.6, -2, 1, 0)
+    ApplyButton.Position = UDim2.new(0.4, 2, 0, 0)
+    ApplyButton.BackgroundColor3 = TAB_COLORS.Boy
+    ApplyButton.BackgroundTransparency = 0.15
+    ApplyButton.BorderSizePixel = 0
+    ApplyButton.Text = "APPLY AVATAR"
+    ApplyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ApplyButton.Font = Enum.Font.GothamBold
+    ApplyButton.TextSize = isMobile and 8 or 11
+    ApplyButton.AutoButtonColor = false
+    ApplyButton.ZIndex = 7
+    ApplyButton.Parent = ActionContainer
+
+    local ApplyCorner = Instance.new("UICorner")
+    ApplyCorner.CornerRadius = UDim.new(0, 7)
+    ApplyCorner.Parent = ApplyButton
+
+    local ApplyStroke = Instance.new("UIStroke")
+    ApplyStroke.Name = "ApplyStroke"
+    ApplyStroke.Color = TAB_COLORS.Boy
+    ApplyStroke.Transparency = 0.5
+    ApplyStroke.Thickness = 1.5
+    ApplyStroke.Parent = ApplyButton
+
+    return ScreenGui
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALIZATION
+-- ═══════════════════════════════════════════════════════════════
+
+local UI = createUI()
+
+task.spawn(function()
+    local success = loadAvatarDataFromServer()
+    if not success then return end
+    isLoading = false
+    
+    local frame = UI:FindFirstChild("MainFrame")
+    if not frame then return end
+    
+    local loadingContainer = frame:FindFirstChild("LoadingContainer")
+    local content = frame:FindFirstChild("Content")
+
+    if loadingContainer then
+        loadingContainer.Visible = false
+    end
+    
+    if content then
+        content.Visible = true
+    end
+
+    updatePreview(UI)
+    updateTabVisuals(UI, CurrentTab)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- EVENT CONNECTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+local ToggleButton = UI:FindFirstChild("ToggleButton")
+local Frame = UI:FindFirstChild("MainFrame")
+local TabContainer = Frame and Frame:FindFirstChild("TabContainer")
+local BoyTab = TabContainer and TabContainer:FindFirstChild("BoyTab")
+local GirlTab = TabContainer and TabContainer:FindFirstChild("GirlTab")
+local Content = Frame and Frame:FindFirstChild("Content")
+local NavContainer = Content and Content:FindFirstChild("NavContainer")
+local PrevButton = NavContainer and NavContainer:FindFirstChild("PrevButton")
+local NextButton = NavContainer and NavContainer:FindFirstChild("NextButton")
+local ActionContainer = Content and Content:FindFirstChild("ActionContainer")
+local ResetButton = ActionContainer and ActionContainer:FindFirstChild("ResetButton")
+local ApplyButton = ActionContainer and ActionContainer:FindFirstChild("ApplyButton")
+
+if ToggleButton then
+    ToggleButton.MouseButton1Click:Connect(function()
+        togglePanel(UI)
+    end)
+end
+
+if BoyTab then
+    BoyTab.MouseButton1Click:Connect(function()
+        switchTab(UI, "Boy")
+    end)
+end
+
+if GirlTab then
+    GirlTab.MouseButton1Click:Connect(function()
+        switchTab(UI, "Girl")
+    end)
+end
+
+if PrevButton then
+    PrevButton.MouseButton1Click:Connect(function()
+        if isLoading then return end
+        local avatarList = getCurrentAvatarList()
+        if #avatarList == 0 then return end
+        CurrentIndex = CurrentIndex - 1
+        if CurrentIndex < 1 then
+            CurrentIndex = #avatarList
+        end
+        updatePreview(UI)
+    end)
+end
+
+if NextButton then
+    NextButton.MouseButton1Click:Connect(function()
+        if isLoading then return end
+        local avatarList = getCurrentAvatarList()
+        if #avatarList == 0 then return end
+        CurrentIndex = CurrentIndex + 1
+        if CurrentIndex > #avatarList then
+            CurrentIndex = 1
+        end
+        updatePreview(UI)
+    end)
+end
+
+if ResetButton then
+    ResetButton.MouseButton1Click:Connect(function()
+        if isLoading then return end
+        resetAvatar()
+        ResetButton.Text = "✓ OK"
+        task.spawn(function()
+            task.wait(1)
+            ResetButton.Text = "RESET"
+        end)
+    end)
+end
+
+if ApplyButton then
+    ApplyButton.MouseButton1Click:Connect(function()
+        if isChanging then return end
+        local avatarList = getCurrentAvatarList()
+        if #avatarList == 0 then return end
+        local selectedAvatar = avatarList[CurrentIndex]
+        if selectedAvatar and selectedAvatar.UserId then
+            changeAvatar(selectedAvatar.UserId)
+            ApplyButton.Text = "✓ APPLIED"
+            task.spawn(function()
+                task.wait(1)
+                ApplyButton.Text = "APPLY AVATAR"
+                if not isChanging then
+                    togglePanel(UI)
+                end
+            end)
+        end
+    end)
+end
+
+print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+print("✅ AVATAR CHANGER CLIENT READY!")
+print("👤 Author: ItoRenz00")
+print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
