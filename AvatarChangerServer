@@ -1,0 +1,304 @@
+--[[
+    ═══════════════════════════════════════════════════════════════
+    AVATAR CHANGER SYSTEM - SERVER SIDE
+    ═══════════════════════════════════════════════════════════════
+    Author: ItoRenz00
+    Description: Server-side avatar handler
+    Location: ServerScriptService
+    ═══════════════════════════════════════════════════════════════
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ContentProvider = game:GetService("ContentProvider")
+
+local COOLDOWN_TIME = 2
+local MAX_RETRY_ATTEMPTS = 3
+local RETRY_DELAY = 0.3
+local PBR_PRELOAD_DELAY = 0.5
+local DEBUG_MODE = false
+
+local RemoteEvent = ReplicatedStorage:FindFirstChild("ChangeAvatar")
+if not RemoteEvent then
+    RemoteEvent = Instance.new("RemoteEvent")
+    RemoteEvent.Name = "ChangeAvatar"
+    RemoteEvent.Parent = ReplicatedStorage
+end
+
+local RefreshTitleEvent = ReplicatedStorage:FindFirstChild("RefreshTitle")
+if not RefreshTitleEvent then
+    RefreshTitleEvent = Instance.new("RemoteEvent")
+    RefreshTitleEvent.Name = "RefreshTitle"
+    RefreshTitleEvent.Parent = ReplicatedStorage
+end
+
+local Cooldowns = {}
+local SavedAvatars = {}
+
+local function debugLog(...)
+    if DEBUG_MODE then
+        print(...)
+    end
+end
+
+local function isOnCooldown(playerId)
+    if Cooldowns[playerId] then
+        local timeLeft = Cooldowns[playerId] - os.clock()
+        if timeLeft > 0 then
+            return true, timeLeft
+        end
+    end
+    return false, 0
+end
+
+local function setCooldown(playerId)
+    Cooldowns[playerId] = os.clock() + COOLDOWN_TIME
+end
+
+local function isValidUserId(userId)
+    return typeof(userId) == "number" and userId > 0
+end
+
+local function isAvatarAllowed(userId)
+    local AvatarStorage = ReplicatedStorage:FindFirstChild("AvatarStorage")
+    if not AvatarStorage then return false end
+    
+    local BoyFolder = AvatarStorage:FindFirstChild("Boy")
+    local GirlFolder = AvatarStorage:FindFirstChild("Girl")
+    
+    if BoyFolder then
+        for _, value in ipairs(BoyFolder:GetChildren()) do
+            if value:IsA("IntValue") and value.Value == userId then
+                return true
+            end
+        end
+    end
+    
+    if GirlFolder then
+        for _, value in ipairs(GirlFolder:GetChildren()) do
+            if value:IsA("IntValue") and value.Value == userId then
+                return true
+            end
+        end
+    end
+    
+    return false
+end
+
+local function preloadPBRTextures(character, playerName)
+    task.wait(PBR_PRELOAD_DELAY)
+    if not character or not character.Parent then
+        return
+    end
+    
+    local surfaceAppearances = {}
+    for _, descendant in pairs(character:GetDescendants()) do
+        if descendant:IsA("SurfaceAppearance") then
+            table.insert(surfaceAppearances, descendant)
+        end
+    end
+    
+    if #surfaceAppearances > 0 then
+        local success, err = pcall(function()
+            ContentProvider:PreloadAsync(surfaceAppearances)
+        end)
+        
+        if success then
+            debugLog("✅ PBR Textures preloaded for", playerName, "(" .. #surfaceAppearances .. " surfaces)")
+        else
+            warn("⚠️ Some PBR textures failed to preload for", playerName .. ":", err)
+        end
+    end
+end
+
+local function applyAvatar(player, userId, skipSave)
+    if not player or not player.Parent then
+        warn("❌ Player tidak valid atau sudah leave")
+        return false
+    end
+    if not isValidUserId(userId) then
+        warn("❌ Invalid UserId:", userId, "dari player:", player.Name)
+        return false
+    end
+    local onCooldown, timeLeft = isOnCooldown(player.UserId)
+    if onCooldown then
+        warn("⏳", player.Name, "masih cooldown", math.ceil(timeLeft), "detik")
+        return false
+    end
+    if not isAvatarAllowed(userId) then
+        warn("❌ Unauthorized avatar request:", userId, "dari player:", player.Name)
+        return false
+    end
+    local character = player.Character
+    if not character then
+        warn("❌ Character tidak ditemukan untuk:", player.Name)
+        return false
+    end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        warn("❌ Humanoid tidak ditemukan untuk:", player.Name)
+        return false
+    end
+    
+    local description = nil
+    local lastError = nil
+    for attempt = 1, MAX_RETRY_ATTEMPTS do
+        local success, result = pcall(function()
+            return Players:GetHumanoidDescriptionFromUserId(userId)
+        end)
+        if success and result then
+            description = result
+            break
+        else
+            lastError = result
+            if attempt < MAX_RETRY_ATTEMPTS then
+                warn("⚠️ Attempt", attempt, "failed, retrying...")
+                task.wait(RETRY_DELAY)
+            end
+        end
+    end
+    if not description then
+        warn("❌ Gagal mendapatkan HumanoidDescription untuk UserId:", userId)
+        if lastError then
+            warn("Last error:", lastError)
+        end
+        return false
+    end
+    
+    task.spawn(function()
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        local originalAnchored = rootPart and rootPart.Anchored or false
+        if rootPart then
+            rootPart.Anchored = true
+        end
+        
+        local success, error = pcall(function()
+            humanoid:ApplyDescription(description)
+        end)
+        if not success then
+            warn("❌ Gagal apply description:", error)
+            if rootPart then
+                rootPart.Anchored = originalAnchored
+            end
+            return
+        end
+        
+        task.wait(0.05)
+        pcall(function()
+            humanoid:BuildRigFromAttachments()
+        end)
+        if rootPart then
+            rootPart.Anchored = originalAnchored
+        end
+        
+        if not skipSave then
+            SavedAvatars[player.UserId] = userId
+            debugLog("💾 Saved avatar for", player.Name, "→", userId)
+        end
+        debugLog("✅ Avatar", player.Name, "berubah ke UserId:", userId)
+        setCooldown(player.UserId)
+        
+        task.spawn(function()
+            preloadPBRTextures(character, player.Name)
+        end)
+        
+        task.wait(0.2)
+        if RefreshTitleEvent and player.Parent then
+            pcall(function()
+                RefreshTitleEvent:FireClient(player)
+                debugLog("🔄 Title refresh triggered for", player.Name)
+            end)
+        end
+    end)
+    return true
+end
+
+local function setupRespawnHandler(player)
+    player.CharacterAdded:Connect(function(character)
+        local savedUserId = SavedAvatars[player.UserId]
+        if savedUserId and savedUserId ~= player.UserId then
+            debugLog("🔄 Respawn detected for", player.Name, "→ Reapplying avatar:", savedUserId)
+            task.spawn(function()
+                applyAvatar(player, savedUserId, true)
+            end)
+        end
+    end)
+end
+
+RemoteEvent.OnServerEvent:Connect(function(player, userId)
+    if not player or not player.Parent then
+        return
+    end
+    debugLog("📨 Request dari", player.Name, "untuk UserId:", userId)
+    local success = applyAvatar(player, userId, false)
+    if not success then
+        debugLog("❌ Request gagal untuk", player.Name)
+    end
+end)
+
+Players.PlayerAdded:Connect(function(player)
+    setupRespawnHandler(player)
+    debugLog("👤 Setup respawn handler untuk:", player.Name)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    if Cooldowns[player.UserId] then
+        Cooldowns[player.UserId] = nil
+    end
+    if SavedAvatars[player.UserId] then
+        SavedAvatars[player.UserId] = nil
+    end
+    debugLog("🧹 Cleaned up data untuk:", player.Name)
+end)
+
+local function clearCooldown(playerId)
+    if Cooldowns[playerId] then
+        Cooldowns[playerId] = nil
+        if DEBUG_MODE then print("✅ Cooldown cleared untuk player ID:", playerId) end
+        return true
+    end
+    return false
+end
+
+local function clearAllCooldowns()
+    local count = 0
+    for _ in pairs(Cooldowns) do
+        count = count + 1
+    end
+    Cooldowns = {}
+    if DEBUG_MODE then print("✅ Cleared", count, "cooldown(s)") end
+end
+
+local function resetAvatar(playerId)
+    if SavedAvatars[playerId] then
+        SavedAvatars[playerId] = nil
+        if DEBUG_MODE then print("✅ Reset saved avatar untuk player ID:", playerId) end
+        return true
+    end
+    return false
+end
+
+_G.AvatarChanger = {
+    ClearCooldown = clearCooldown,
+    ClearAllCooldowns = clearAllCooldowns,
+    ResetSavedAvatar = resetAvatar,
+    GetCooldowns = function() return Cooldowns end,
+    GetSavedAvatars = function() return SavedAvatars end,
+    SetDebugMode = function(enabled)
+        DEBUG_MODE = enabled
+        print("🔧 Debug mode:", enabled and "ENABLED" or "DISABLED")
+    end
+}
+
+print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+print("✅ AVATAR CHANGER SERVER READY!")
+print("👤 Author: ItoRenz00")
+print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+print("⚙️  Cooldown Time:", COOLDOWN_TIME, "seconds")
+print("🔄 Max Retry:", MAX_RETRY_ATTEMPTS, "attempts")
+print("🔧 Debug Mode:", DEBUG_MODE and "ON" or "OFF")
+print("📡 RemoteEvent:", RemoteEvent:GetFullName())
+print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+if not DEBUG_MODE then
+    print("💡 Tip: Set DEBUG_MODE = true untuk detailed logs")
+end
