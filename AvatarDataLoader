@@ -1,0 +1,256 @@
+--[[
+    ═══════════════════════════════════════════════════════════════
+    AVATAR DATA LOADER - SERVER SIDE
+    ═══════════════════════════════════════════════════════════════
+    Author: ItoRenz00
+    Description: Loads avatar usernames and converts to UserIds
+    Location: ServerScriptService
+    ═══════════════════════════════════════════════════════════════
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- ═══════════════════════════════════════════════════════════════
+-- CONFIGURATION
+-- ═══════════════════════════════════════════════════════════════
+
+local DEBUG_MODE = false
+
+local AvatarData = {
+    Boy = {
+        "ItoRenz00",
+        "NIIQRYB",
+        "HeiHeiHeeeeiiii",
+        "bay220122",
+        "Rexannn9",
+        "AkuGantengggg18",
+        "ZynnnX02",
+        "xuzuhaa",
+        "kigenteji",
+        "ManciPerkoro",
+        "AimBre3",
+        "HiYowbie",
+        "ramonn_24",
+        "korekapi76",
+        "HaLz2708",
+        "rey220122",
+        "Putrazennnnn",
+        "cuddlegbugs7",
+        "jibei88",
+        "tehaeoh",
+        "Kayzennnnn_6",
+        "Szaxml3",
+        "jeonoryxz",
+        "Lek_MenHo",
+        "xihuahua0",
+        "KinkRii8",
+        "Kuli_Proyeks",
+        "scoriest1",
+        "zavi_rn",
+        "abawwaw",
+        "MedusaABP",
+        "Shadow_warrior2829",
+        "SEYYYYY3001",
+        "youminebabyy",
+        "whovano1",
+        "ehbangput",
+        "Xitencell",
+        "GRACE_GRCXZ",
+        "GENZZCUY",
+        "Kio_cho",
+        "xShigen_1",
+        "MeroooTV2",
+        "Mahenrpf",
+        "Cipungawaw",
+        "Honey_Na05",
+        "Robloxyanto4",
+        "MailMyName",
+        "syd_arhm",
+        "Aegis_459",
+        "PrassReborn",
+    },
+    Girl = {
+        "indytzy",
+        "bbyskyyy04",
+        "nonpeisa",
+        "Skyyaa_1",
+        "kayanaa_24",
+        "urgirfie",
+        "shinya_2206",
+        "Phoosea69",
+        "windi050103",
+        "Kayyeee385",
+        "annoyingg02",
+        "Lidyajungie",
+        "hy_ayystrr",
+        "MyCnyy",
+        "kimikuchann",
+        "mable133cute",
+        "onedacn",
+        "BIBOLGAMING07",
+        "chichimeloo",
+        "marsha_aurelia9",
+        "sweetlynfy",
+        "Ellyisania",
+        "Vunnyyyy2",
+        "MBUTYA",
+        "Viktoriyaa92",
+        "onychann_n",
+        "Danboo_18",
+        "jessicaangelflorence",
+        "nnasyar",
+        "szhey0",
+        "americanoted",
+        "gebby1718",
+        "florynn011",
+        "Marescha99",
+        "essssusu",
+        "Vay_aayeee",
+        "vgirl688",
+        "VirLezzzz",
+        "Chaee3333",
+        "litlestar578",
+        "ell111714",
+        "ranbew1",
+        "Yeniyps",
+        "Chiyeonn01",
+        "Je_2279",
+        "Queenmey25",
+        "RNI_469",
+        "eykhaaa2",
+        "lucielunee",
+        "Silkymellaa",
+        "aykikaa",
+        "nawmii_21",
+        "AzzahhraaLvv",
+        "riskaaa20111",
+    }
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- SETUP
+-- ═══════════════════════════════════════════════════════════════
+
+local function debugLog(...)
+    if DEBUG_MODE then
+        print(...)
+    end
+end
+
+local AvatarStorage = ReplicatedStorage:FindFirstChild("AvatarStorage")
+if not AvatarStorage then
+    AvatarStorage = Instance.new("Folder")
+    AvatarStorage.Name = "AvatarStorage"
+    AvatarStorage.Parent = ReplicatedStorage
+end
+
+local BoyFolder = AvatarStorage:FindFirstChild("Boy")
+if not BoyFolder then
+    BoyFolder = Instance.new("Folder")
+    BoyFolder.Name = "Boy"
+    BoyFolder.Parent = AvatarStorage
+end
+
+local GirlFolder = AvatarStorage:FindFirstChild("Girl")
+if not GirlFolder then
+    GirlFolder = Instance.new("Folder")
+    GirlFolder.Name = "Girl"
+    GirlFolder.Parent = AvatarStorage
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- LOADER FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+local function getUserIdFromUsername(username, retries)
+    retries = retries or 3
+    for attempt = 1, retries do
+        local success, userId = pcall(function()
+            return Players:GetUserIdFromNameAsync(username)
+        end)
+        if success and userId then
+            return userId
+        end
+        if attempt < retries then
+            task.wait(0.5)
+        end
+    end
+    return nil
+end
+
+local function loadAvatarData()
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("🔄 LOADING AVATAR DATA...")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    
+    local totalLoaded = 0
+    local totalFailed = 0
+    local startTime = os.clock()
+    
+    debugLog("👦 Loading Boy avatars...")
+    for i, username in ipairs(AvatarData.Boy) do
+        local userId = getUserIdFromUsername(username)
+        
+        if userId then
+            local value = Instance.new("IntValue")
+            value.Name = username
+            value.Value = userId
+            value.Parent = BoyFolder
+            totalLoaded = totalLoaded + 1
+            debugLog("  ✅", i .. ".", username, "→", userId)
+        else
+            totalFailed = totalFailed + 1
+            warn("  ❌", i .. ".", username, "FAILED")
+        end
+        
+        task.wait(0.01)
+    end
+    
+    debugLog("👧 Loading Girl avatars...")
+    for i, username in ipairs(AvatarData.Girl) do
+        local userId = getUserIdFromUsername(username)
+        
+        if userId then
+            local value = Instance.new("IntValue")
+            value.Name = username
+            value.Value = userId
+            value.Parent = GirlFolder
+            totalLoaded = totalLoaded + 1
+            debugLog("  ✅", i .. ".", username, "→", userId)
+        else
+            totalFailed = totalFailed + 1
+            warn("  ❌", i .. ".", username, "FAILED")
+        end
+        
+        task.wait(0.01)
+    end
+    
+    local loadTime = math.floor((os.clock() - startTime) * 10) / 10
+    
+    local ReadyFlag = Instance.new("BoolValue")
+    ReadyFlag.Name = "DataReady"
+    ReadyFlag.Value = true
+    ReadyFlag.Parent = AvatarStorage
+    
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("✅ AVATAR DATA LOADED!")
+    print("👤 Author: ItoRenz00")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("📊 Total Loaded:", totalLoaded)
+    print("❌ Total Failed:", totalFailed)
+    print("⏱️  Load Time:", loadTime, "seconds")
+    print("📁 Storage:", AvatarStorage:GetFullName())
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    if not DEBUG_MODE then
+        print("💡 Tip: Set DEBUG_MODE = true untuk detailed logs")
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALIZATION
+-- ═══════════════════════════════════════════════════════════════
+
+task.spawn(function()
+    loadAvatarData()
+end)
