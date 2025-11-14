@@ -722,6 +722,41 @@ if ApplyButton then
     end)
 end
 
+-- ═══════════════════════════════════════════════════════════════
+-- REFRESH TITLE EVENT LISTENER
+-- ═══════════════════════════════════════════════════════════════
+
+local RefreshTitleEvent = ReplicatedStorage:WaitForChild("RefreshTitle", 10)
+if RefreshTitleEvent then
+    RefreshTitleEvent.OnClientEvent:Connect(function(changedPlayerId)
+        local changedPlayer = Players:GetPlayerByUserId(changedPlayerId)
+        
+        if not changedPlayer then return end
+        
+        local character = changedPlayer.Character
+        if not character then return end
+        
+        local head = character:FindFirstChild("Head")
+        if not head then return end
+        
+        local billboardGui = head:FindFirstChild("TitleGui") or head:FindFirstChild("OverheadGui") or head:FindFirstChild("NameTag")
+        
+        if billboardGui and billboardGui:IsA("BillboardGui") then
+            task.wait(0.3)
+            
+            billboardGui.Enabled = false
+            task.wait(0.05)
+            billboardGui.Enabled = true
+            
+            print("🔄 Refreshed title for:", changedPlayer.Name)
+        end
+    end)
+    
+    print("✅ RefreshTitle event listener connected!")
+else
+    warn("⚠️ RefreshTitle RemoteEvent not found!")
+end
+
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 print("✅ AVATAR CHANGER CLIENT READY!")
 print("👤 Author: ItoRenz00")
