@@ -34,6 +34,7 @@ end
 
 local Cooldowns = {}
 local SavedAvatars = {}
+local OriginalAvatars = {}
 
 local function debugLog(...)
     if DEBUG_MODE then
@@ -111,7 +112,34 @@ local function preloadPBRTextures(character, playerName)
     end
 end
 
-local function applyAvatar(player, userId, skipSave)
+local function saveOriginalAvatar(player)
+    if OriginalAvatars[player.UserId] then
+        return
+    end
+    
+    local character = player.Character
+    if not character then
+        return
+    end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return
+    end
+    
+    local success, description = pcall(function()
+        return humanoid:GetAppliedDescription()
+    end)
+    
+    if success and description then
+        OriginalAvatars[player.UserId] = description
+        debugLog("💾 Saved original avatar for", player.Name)
+    else
+        warn("❌ Failed to save original avatar for", player.Name)
+    end
+end
+
+local function applyAvatar(player, userId, skipSave, isReset)
     if not player or not player.Parent then
         warn("❌ Player tidak valid atau sudah leave")
         return false
@@ -125,7 +153,8 @@ local function applyAvatar(player, userId, skipSave)
         warn("⏳", player.Name, "masih cooldown", math.ceil(timeLeft), "detik")
         return false
     end
-    if not isAvatarAllowed(userId) then
+    
+    if not isReset and not isAvatarAllowed(userId) and userId ~= player.UserId then
         warn("❌ Unauthorized avatar request:", userId, "dari player:", player.Name)
         return false
     end
@@ -141,28 +170,34 @@ local function applyAvatar(player, userId, skipSave)
     end
     
     local description = nil
-    local lastError = nil
-    for attempt = 1, MAX_RETRY_ATTEMPTS do
-        local success, result = pcall(function()
-            return Players:GetHumanoidDescriptionFromUserId(userId)
-        end)
-        if success and result then
-            description = result
-            break
-        else
-            lastError = result
-            if attempt < MAX_RETRY_ATTEMPTS then
-                warn("⚠️ Attempt", attempt, "failed, retrying...")
-                task.wait(RETRY_DELAY)
+    
+    if isReset and OriginalAvatars[player.UserId] then
+        description = OriginalAvatars[player.UserId]
+        debugLog("🔄 Using saved original avatar for", player.Name)
+    else
+        local lastError = nil
+        for attempt = 1, MAX_RETRY_ATTEMPTS do
+            local success, result = pcall(function()
+                return Players:GetHumanoidDescriptionFromUserId(userId)
+            end)
+            if success and result then
+                description = result
+                break
+            else
+                lastError = result
+                if attempt < MAX_RETRY_ATTEMPTS then
+                    warn("⚠️ Attempt", attempt, "failed, retrying...")
+                    task.wait(RETRY_DELAY)
+                end
             end
         end
-    end
-    if not description then
-        warn("❌ Gagal mendapatkan HumanoidDescription untuk UserId:", userId)
-        if lastError then
-            warn("Last error:", lastError)
+        if not description then
+            warn("❌ Gagal mendapatkan HumanoidDescription untuk UserId:", userId)
+            if lastError then
+                warn("Last error:", lastError)
+            end
+            return false
         end
-        return false
     end
     
     task.spawn(function()
@@ -192,8 +227,13 @@ local function applyAvatar(player, userId, skipSave)
         end
         
         if not skipSave then
-            SavedAvatars[player.UserId] = userId
-            debugLog("💾 Saved avatar for", player.Name, "→", userId)
+            if isReset then
+                SavedAvatars[player.UserId] = nil
+                debugLog("🔄 Cleared saved avatar for", player.Name)
+            else
+                SavedAvatars[player.UserId] = userId
+                debugLog("💾 Saved avatar for", player.Name, "→", userId)
+            end
         end
         debugLog("✅ Avatar", player.Name, "berubah ke UserId:", userId)
         setCooldown(player.UserId)
@@ -203,10 +243,10 @@ local function applyAvatar(player, userId, skipSave)
         end)
         
         task.wait(0.2)
-        if RefreshTitleEvent and player.Parent then
+        if RefreshTitleEvent then
             pcall(function()
-                RefreshTitleEvent:FireClient(player)
-                debugLog("🔄 Title refresh triggered for", player.Name)
+                RefreshTitleEvent:FireAllClients(player.UserId)
+                debugLog("🔄 Title refresh triggered for all players (changed player:", player.Name .. ")")
             end)
         end
     end)
@@ -215,6 +255,9 @@ end
 
 local function setupRespawnHandler(player)
     player.CharacterAdded:Connect(function(character)
+        task.wait(0.1)
+        saveOriginalAvatar(player)
+        
         local savedUserId = SavedAvatars[player.UserId]
         if savedUserId and savedUserId ~= player.UserId then
             debugLog("🔄 Respawn detected for", player.Name, "→ Reapplying avatar:", savedUserId)
@@ -230,7 +273,9 @@ RemoteEvent.OnServerEvent:Connect(function(player, userId)
         return
     end
     debugLog("📨 Request dari", player.Name, "untuk UserId:", userId)
-    local success = applyAvatar(player, userId, false)
+    
+    local isReset = (userId == player.UserId)
+    local success = applyAvatar(player, userId, false, isReset)
     if not success then
         debugLog("❌ Request gagal untuk", player.Name)
     end
@@ -239,6 +284,10 @@ end)
 Players.PlayerAdded:Connect(function(player)
     setupRespawnHandler(player)
     debugLog("👤 Setup respawn handler untuk:", player.Name)
+    
+    if player.Character then
+        saveOriginalAvatar(player)
+    end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
@@ -247,6 +296,9 @@ Players.PlayerRemoving:Connect(function(player)
     end
     if SavedAvatars[player.UserId] then
         SavedAvatars[player.UserId] = nil
+    end
+    if OriginalAvatars[player.UserId] then
+        OriginalAvatars[player.UserId] = nil
     end
     debugLog("🧹 Cleaned up data untuk:", player.Name)
 end)
@@ -284,6 +336,7 @@ _G.AvatarChanger = {
     ResetSavedAvatar = resetAvatar,
     GetCooldowns = function() return Cooldowns end,
     GetSavedAvatars = function() return SavedAvatars end,
+    GetOriginalAvatars = function() return OriginalAvatars end,
     SetDebugMode = function(enabled)
         DEBUG_MODE = enabled
         print("🔧 Debug mode:", enabled and "ENABLED" or "DISABLED")
