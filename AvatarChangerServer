@@ -3,7 +3,7 @@
     AVATAR CHANGER SYSTEM - SERVER SIDE
     ═══════════════════════════════════════════════════════════════
     Author: ItoRenz00
-    Description: Server-side avatar handler
+    Description: Server-side avatar handler with effect support
     Location: ServerScriptService
     ═══════════════════════════════════════════════════════════════
 ]]
@@ -17,6 +17,10 @@ local MAX_RETRY_ATTEMPTS = 3
 local RETRY_DELAY = 0.3
 local PBR_PRELOAD_DELAY = 0.5
 local DEBUG_MODE = false
+
+-- ═══════════════════════════════════════════════════════════════
+-- REMOTE EVENTS SETUP
+-- ═══════════════════════════════════════════════════════════════
 
 local RemoteEvent = ReplicatedStorage:FindFirstChild("ChangeAvatar")
 if not RemoteEvent then
@@ -32,9 +36,24 @@ if not RefreshTitleEvent then
     RefreshTitleEvent.Parent = ReplicatedStorage
 end
 
+local AvatarEffectEvent = ReplicatedStorage:FindFirstChild("AvatarEffectTrigger")
+if not AvatarEffectEvent then
+    AvatarEffectEvent = Instance.new("RemoteEvent")
+    AvatarEffectEvent.Name = "AvatarEffectTrigger"
+    AvatarEffectEvent.Parent = ReplicatedStorage
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- DATA STORAGE
+-- ═══════════════════════════════════════════════════════════════
+
 local Cooldowns = {}
 local SavedAvatars = {}
 local OriginalAvatars = {}
+
+-- ═══════════════════════════════════════════════════════════════
+-- UTILITY FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
 
 local function debugLog(...)
     if DEBUG_MODE then
@@ -85,6 +104,10 @@ local function isAvatarAllowed(userId)
     
     return false
 end
+
+-- ═══════════════════════════════════════════════════════════════
+-- AVATAR FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
 
 local function preloadPBRTextures(character, playerName)
     task.wait(PBR_PRELOAD_DELAY)
@@ -268,6 +291,10 @@ local function setupRespawnHandler(player)
     end)
 end
 
+-- ═══════════════════════════════════════════════════════════════
+-- EVENT HANDLERS
+-- ═══════════════════════════════════════════════════════════════
+
 RemoteEvent.OnServerEvent:Connect(function(player, userId)
     if not player or not player.Parent then
         return
@@ -279,6 +306,12 @@ RemoteEvent.OnServerEvent:Connect(function(player, userId)
     if not success then
         debugLog("❌ Request gagal untuk", player.Name)
     end
+end)
+
+AvatarEffectEvent.OnServerEvent:Connect(function(player)
+    if not player or not player.Parent then return end
+    AvatarEffectEvent:FireAllClients(player.UserId)
+    debugLog("✨ Avatar effect triggered for", player.Name)
 end)
 
 Players.PlayerAdded:Connect(function(player)
@@ -302,6 +335,10 @@ Players.PlayerRemoving:Connect(function(player)
     end
     debugLog("🧹 Cleaned up data untuk:", player.Name)
 end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- ADMIN FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
 
 local function clearCooldown(playerId)
     if Cooldowns[playerId] then
@@ -343,6 +380,10 @@ _G.AvatarChanger = {
     end
 }
 
+-- ═══════════════════════════════════════════════════════════════
+-- INITIALIZATION
+-- ═══════════════════════════════════════════════════════════════
+
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 print("✅ AVATAR CHANGER SERVER READY!")
 print("👤 Author: ItoRenz00")
@@ -351,6 +392,7 @@ print("⚙️  Cooldown Time:", COOLDOWN_TIME, "seconds")
 print("🔄 Max Retry:", MAX_RETRY_ATTEMPTS, "attempts")
 print("🔧 Debug Mode:", DEBUG_MODE and "ON" or "OFF")
 print("📡 RemoteEvent:", RemoteEvent:GetFullName())
+print("✨ Effect Event:", AvatarEffectEvent:GetFullName())
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 if not DEBUG_MODE then
     print("💡 Tip: Set DEBUG_MODE = true untuk detailed logs")
