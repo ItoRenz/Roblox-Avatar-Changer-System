@@ -1,0 +1,910 @@
+--[[
+    ═══════════════════════════════════════════════════════════════
+    AVATAR TRANSFORMATION EFFECT
+    Author: ItoRenz
+    Description: Epic Transformation effect
+    ═══════════════════════════════════════════════════════════════
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
+
+local LocalPlayer = Players.LocalPlayer
+local AvatarEffectEvent = ReplicatedStorage:WaitForChild("AvatarEffectTrigger", 10)
+
+local CONFIG = {
+    -- Timing
+    TotalDuration = 6,
+    ChargeTime = 1.5,
+    BuildupTime = 2.0,
+    PeakTime = 0.8,
+    FadeTime = 1.7,
+    
+    -- Colors
+    PrimaryColor = Color3.fromRGB(100, 200, 255),
+    SecondaryColor = Color3.fromRGB(255, 255, 255),
+    AuraColor = Color3.fromRGB(150, 220, 255),
+    LightningColor = Color3.fromRGB(200, 230, 255),
+    ExplosionColor = Color3.fromRGB(255, 255, 255),
+    
+    -- Aura
+    AuraSize = 7,
+    AuraLayers = 4,
+    
+    -- Ground
+    CrackCount = 16,
+    DebrisCount = 20,
+    
+    -- Energy
+    EnergyRingCount = 5,
+    LightningBoltCount = 30,
+    ParticleIntensity = 250,
+    
+    -- Camera
+    ShakeMagnitude = 1.5,
+    ShakeFrequency = 50,
+    
+    -- Audio
+    SoundFadeOutTime = 0.5,
+}
+
+local TransformSoundId = "rbxassetid://113257119036898"
+
+-- ═══════════════════════════════════════════════════════════════
+-- UTILITY FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+local function getGroundPosition(character)
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return nil end
+    
+    local rootPosition = rootPart.Position
+    local rayDirection = Vector3.new(0, -100, 0)
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {character}
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    
+    local raycastResult = workspace:Raycast(rootPosition, rayDirection, raycastParams)
+    
+    if raycastResult then
+        return raycastResult.Position
+    else
+        return rootPosition - Vector3.new(0, 3, 0)
+    end
+end
+
+local function lerpColor(color1, color2, t)
+    return Color3.new(
+        color1.R + (color2.R - color1.R) * t,
+        color1.G + (color2.G - color1.G) * t,
+        color1.B + (color2.B - color1.B) * t
+    )
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- SOUND FADE OUT SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+local function fadeOutAndStopSound(sound, fadeTime)
+    if not sound or not sound.Parent then return end
+    
+    local initialVolume = sound.Volume
+    
+    local fadeTween = TweenService:Create(
+        sound,
+        TweenInfo.new(fadeTime, Enum.EasingStyle.Linear),
+        {Volume = 0}
+    )
+    
+    fadeTween:Play()
+    
+    fadeTween.Completed:Connect(function()
+        sound:Stop()
+        sound.Volume = initialVolume
+        sound:Destroy()
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- AURA SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+local function createAuraSystem(character, container)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    local auraLayers = {}
+    
+    for i = 1, CONFIG.AuraLayers do
+        local sizeMultiplier = 1 + (i - 1) * 0.4
+        
+        local auraLayer = Instance.new("Part")
+        auraLayer.Name = "AuraLayer" .. i
+        auraLayer.Size = Vector3.new(
+            CONFIG.AuraSize * sizeMultiplier,
+            CONFIG.AuraSize * sizeMultiplier * 1.5,
+            CONFIG.AuraSize * sizeMultiplier
+        )
+        auraLayer.Material = Enum.Material.Neon
+        auraLayer.Color = i % 2 == 0 and CONFIG.PrimaryColor or CONFIG.SecondaryColor
+        auraLayer.Transparency = 1
+        auraLayer.Anchored = true
+        auraLayer.CanCollide = false
+        auraLayer.CastShadow = false
+        auraLayer.Shape = Enum.PartType.Ball
+        auraLayer.Parent = container
+        
+        local particle = Instance.new("ParticleEmitter")
+        particle.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, CONFIG.PrimaryColor),
+            ColorSequenceKeypoint.new(0.5, CONFIG.SecondaryColor),
+            ColorSequenceKeypoint.new(1, CONFIG.PrimaryColor)
+        })
+        particle.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0),
+            NumberSequenceKeypoint.new(0.3, 2),
+            NumberSequenceKeypoint.new(1, 0)
+        })
+        particle.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.5),
+            NumberSequenceKeypoint.new(1, 1)
+        })
+        particle.Lifetime = NumberRange.new(0.5, 1.0)
+        particle.Rate = 0
+        particle.Speed = NumberRange.new(10, 15)
+        particle.SpreadAngle = Vector2.new(180, 180)
+        particle.LightEmission = 1
+        particle.Texture = "rbxasset://textures/particles/smoke_main.dds"
+        particle.Parent = auraLayer
+        
+        table.insert(auraLayers, {
+            part = auraLayer,
+            particle = particle,
+            layer = i,
+            baseSize = auraLayer.Size,
+            pulseSpeed = 3 + i * 0.5
+        })
+    end
+    
+    return {
+        layers = auraLayers,
+        rootPart = hrp
+    }
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- GROUND IMPACT
+-- ═══════════════════════════════════════════════════════════════
+
+local function createGroundCracks(position, container)
+    local cracks = {}
+    
+    for i = 1, CONFIG.CrackCount do
+        local angle = (math.pi * 2 / CONFIG.CrackCount) * i
+        local length = 15 + math.random() * 10
+        
+        local crack = Instance.new("Part")
+        crack.Name = "GroundCrack" .. i
+        crack.Size = Vector3.new(0.8, 0.2, length)
+        crack.Material = Enum.Material.Neon
+        crack.Color = CONFIG.PrimaryColor
+        crack.Transparency = 1
+        crack.Anchored = true
+        crack.CanCollide = false
+        crack.CastShadow = false
+        crack.CFrame = CFrame.new(position + Vector3.new(0, 0.1, 0)) * CFrame.Angles(0, angle, 0)
+        crack.Parent = container
+        
+        table.insert(cracks, {
+            part = crack,
+            maxLength = length,
+            angle = angle
+        })
+    end
+    
+    return cracks
+end
+
+local function createDebrisSystem(position, container)
+    local debrisList = {}
+    
+    for i = 1, CONFIG.DebrisCount do
+        local angle = math.random() * math.pi * 2
+        local distance = 5 + math.random() * 8
+        
+        local debris = Instance.new("Part")
+        debris.Name = "Debris" .. i
+        debris.Size = Vector3.new(
+            1.5 + math.random() * 2,
+            1.5 + math.random() * 2,
+            1.5 + math.random() * 2
+        )
+        debris.Material = Enum.Material.Slate
+        debris.Color = Color3.fromRGB(90, 90, 90)
+        debris.Transparency = 1
+        debris.Anchored = true
+        debris.CanCollide = false
+        debris.CastShadow = true
+        debris.Parent = container
+        
+        local startPos = position + Vector3.new(
+            math.cos(angle) * distance,
+            -2,
+            math.sin(angle) * distance
+        )
+        
+        debris.Position = startPos
+        debris.CFrame = debris.CFrame * CFrame.Angles(
+            math.random() * math.pi,
+            math.random() * math.pi,
+            math.random() * math.pi
+        )
+        
+        table.insert(debrisList, {
+            part = debris,
+            startPos = startPos,
+            targetHeight = 6 + math.random() * 5,
+            rotSpeed = Vector3.new(
+                (math.random() - 0.5) * 3,
+                (math.random() - 0.5) * 3,
+                (math.random() - 0.5) * 3
+            )
+        })
+    end
+    
+    return debrisList
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- ENERGY RINGS
+-- ═══════════════════════════════════════════════════════════════
+
+local function createEnergyRings(position, container)
+    local rings = {}
+    
+    for i = 1, CONFIG.EnergyRingCount do
+        local ring = Instance.new("Part")
+        ring.Name = "EnergyRing" .. i
+        ring.Size = Vector3.new(0.3, 1, 1)
+        ring.Material = Enum.Material.Neon
+        ring.Color = i % 2 == 0 and CONFIG.PrimaryColor or CONFIG.SecondaryColor
+        ring.Transparency = 1
+        ring.Anchored = true
+        ring.CanCollide = false
+        ring.CastShadow = false
+        ring.Shape = Enum.PartType.Cylinder
+        ring.CFrame = CFrame.new(position + Vector3.new(0, 0.5, 0)) * CFrame.Angles(0, 0, math.rad(90))
+        ring.Parent = container
+        
+        table.insert(rings, {
+            part = ring,
+            layer = i,
+            startDelay = (i - 1) * 0.15
+        })
+    end
+    
+    return rings
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- LIGHTNING SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+local function createLightningBolt(startPos, endPos, container, color)
+    local distance = (endPos - startPos).Magnitude
+    local segments = math.floor(distance / 2) + 1
+    local bolts = {}
+    
+    for i = 1, segments - 1 do
+        local t1 = (i - 1) / (segments - 1)
+        local t2 = i / (segments - 1)
+        
+        local pos1 = startPos:Lerp(endPos, t1)
+        local pos2 = startPos:Lerp(endPos, t2)
+        
+        local offset = Vector3.new(
+            (math.random() - 0.5) * 2,
+            (math.random() - 0.5) * 2,
+            (math.random() - 0.5) * 2
+        )
+        pos2 = pos2 + offset
+        
+        local part1 = Instance.new("Part")
+        part1.Size = Vector3.new(0.1, 0.1, 0.1)
+        part1.Transparency = 1
+        part1.Anchored = true
+        part1.CanCollide = false
+        part1.Position = pos1
+        part1.Parent = container
+        
+        local part2 = Instance.new("Part")
+        part2.Size = Vector3.new(0.1, 0.1, 0.1)
+        part2.Transparency = 1
+        part2.Anchored = true
+        part2.CanCollide = false
+        part2.Position = pos2
+        part2.Parent = container
+        
+        local att1 = Instance.new("Attachment", part1)
+        local att2 = Instance.new("Attachment", part2)
+        
+        local beam = Instance.new("Beam")
+        beam.Attachment0 = att1
+        beam.Attachment1 = att2
+        beam.Color = ColorSequence.new(color)
+        beam.Width0 = 0.3
+        beam.Width1 = 0.3
+        beam.Transparency = NumberSequence.new(0.2)
+        beam.LightEmission = 1
+        beam.FaceCamera = true
+        beam.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+        beam.Parent = part1
+        
+        table.insert(bolts, {
+            beam = beam,
+            part1 = part1,
+            part2 = part2
+        })
+    end
+    
+    return bolts
+end
+
+local function createLightningSystem(position, character, container)
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return {} end
+    
+    local lightningStrikes = {}
+    
+    for i = 1, CONFIG.LightningBoltCount do
+        local angle = (math.pi * 2 / CONFIG.LightningBoltCount) * i
+        local distance = 10 + math.random() * 8
+        
+        local groundPos = position + Vector3.new(
+            math.cos(angle) * distance,
+            0,
+            math.sin(angle) * distance
+        )
+        
+        local skyPos = hrp.Position + Vector3.new(
+            (math.random() - 0.5) * 8,
+            20 + math.random() * 10,
+            (math.random() - 0.5) * 8
+        )
+        
+        table.insert(lightningStrikes, {
+            startPos = skyPos,
+            endPos = groundPos,
+            bolts = nil,
+            recreateTimer = 0,
+            recreateInterval = 0.1 + math.random() * 0.2
+        })
+    end
+    
+    return lightningStrikes
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- PARTICLE TORNADO
+-- ═══════════════════════════════════════════════════════════════
+
+local function createParticleTornado(position, container)
+    local tornado = Instance.new("Part")
+    tornado.Name = "ParticleTornado"
+    tornado.Size = Vector3.new(0.1, 0.1, 0.1)
+    tornado.Transparency = 1
+    tornado.Anchored = true
+    tornado.CanCollide = false
+    tornado.Position = position + Vector3.new(0, 5, 0)
+    tornado.Parent = container
+    
+    local particle = Instance.new("ParticleEmitter")
+    particle.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, CONFIG.PrimaryColor),
+        ColorSequenceKeypoint.new(0.5, CONFIG.SecondaryColor),
+        ColorSequenceKeypoint.new(1, CONFIG.AuraColor)
+    })
+    particle.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0),
+        NumberSequenceKeypoint.new(0.2, 3),
+        NumberSequenceKeypoint.new(0.8, 2),
+        NumberSequenceKeypoint.new(1, 0)
+    })
+    particle.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.1, 0.3),
+        NumberSequenceKeypoint.new(0.9, 0.3),
+        NumberSequenceKeypoint.new(1, 1)
+    })
+    particle.Lifetime = NumberRange.new(2, 3)
+    particle.Rate = 0
+    particle.Speed = NumberRange.new(20, 25)
+    particle.SpreadAngle = Vector2.new(30, 30)
+    particle.Rotation = NumberRange.new(0, 360)
+    particle.RotSpeed = NumberRange.new(-400, 400)
+    particle.LightEmission = 1
+    particle.Texture = "rbxasset://textures/particles/smoke_main.dds"
+    particle.Parent = tornado
+    
+    return {
+        part = tornado,
+        particle = particle
+    }
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- EXPLOSION BURST
+-- ═══════════════════════════════════════════════════════════════
+
+local function createExplosionBurst(position, container)
+    local explosion = Instance.new("Part")
+    explosion.Name = "ExplosionCenter"
+    explosion.Size = Vector3.new(0.1, 0.1, 0.1)
+    explosion.Transparency = 1
+    explosion.Anchored = true
+    explosion.CanCollide = false
+    explosion.Position = position + Vector3.new(0, 5, 0)
+    explosion.Parent = container
+    
+    local particle = Instance.new("ParticleEmitter")
+    particle.Color = ColorSequence.new(CONFIG.ExplosionColor)
+    particle.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 8),
+        NumberSequenceKeypoint.new(1, 0)
+    })
+    particle.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0),
+        NumberSequenceKeypoint.new(1, 1)
+    })
+    particle.Lifetime = NumberRange.new(0.8, 1.2)
+    particle.Rate = 500
+    particle.Speed = NumberRange.new(50, 80)
+    particle.SpreadAngle = Vector2.new(180, 180)
+    particle.Rotation = NumberRange.new(0, 360)
+    particle.RotSpeed = NumberRange.new(-500, 500)
+    particle.LightEmission = 1
+    particle.Texture = "rbxasset://textures/particles/fire_main.dds"
+    particle.Enabled = false
+    particle.Parent = explosion
+    
+    return {
+        part = explosion,
+        particle = particle
+    }
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- SCREEN FLASH
+-- ═══════════════════════════════════════════════════════════════
+
+local function createScreenFlash()
+    if not LocalPlayer then return nil end
+    
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+    
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "TransformFlash"
+    screenGui.DisplayOrder = 999
+    screenGui.IgnoreGuiInset = true
+    screenGui.Parent = playerGui
+    
+    local flash = Instance.new("Frame")
+    flash.Size = UDim2.new(1, 0, 1, 0)
+    flash.BackgroundColor3 = CONFIG.ExplosionColor
+    flash.BackgroundTransparency = 1
+    flash.BorderSizePixel = 0
+    flash.Parent = screenGui
+    
+    return {
+        gui = screenGui,
+        frame = flash
+    }
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- CAMERA SHAKE
+-- ═══════════════════════════════════════════════════════════════
+
+local currentShakeConnection = nil
+
+local function stopCameraShake()
+    if currentShakeConnection then
+        currentShakeConnection:Disconnect()
+        currentShakeConnection = nil
+    end
+end
+
+local function applyCameraShake(intensity, duration)
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+    
+    stopCameraShake()
+    
+    local startTime = tick()
+    
+    currentShakeConnection = RunService.RenderStepped:Connect(function(deltaTime)
+        local elapsed = tick() - startTime
+        if elapsed >= duration then
+            stopCameraShake()
+            return
+        end
+        
+        local progress = elapsed / duration
+        local currentIntensity = intensity * (1 - progress)
+        
+        local randomOffset = Vector3.new(
+            (math.random() - 0.5) * 2,
+            (math.random() - 0.5) * 2,
+            (math.random() - 0.5) * 2
+        ) * CONFIG.ShakeMagnitude * currentIntensity * 0.5
+        
+        local shakeX = math.sin(elapsed * CONFIG.ShakeFrequency) * CONFIG.ShakeMagnitude * currentIntensity
+        local shakeY = math.cos(elapsed * CONFIG.ShakeFrequency * 1.3) * CONFIG.ShakeMagnitude * currentIntensity
+        local shakeZ = math.sin(elapsed * CONFIG.ShakeFrequency * 0.8) * CONFIG.ShakeMagnitude * currentIntensity
+        
+        local offset = Vector3.new(shakeX, shakeY, shakeZ) + randomOffset
+        
+        camera.CFrame = camera.CFrame * CFrame.new(offset)
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- SOUND
+-- ═══════════════════════════════════════════════════════════════
+
+local function playTransformSound(isLocalPlayer, character)
+    local sound = Instance.new("Sound")
+    sound.SoundId = TransformSoundId
+    sound.Looped = false
+    sound.Volume = 1
+    sound.PlayOnRemove = false
+    
+    if isLocalPlayer then
+        sound.Parent = SoundService
+    else
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            sound.Volume = 0.7
+            sound.Parent = hrp
+            sound.RollOffMode = Enum.RollOffMode.InverseTapered
+            sound.RollOffMinDistance = 25
+            sound.RollOffMaxDistance = 150
+            sound.EmitterSize = 20
+        else
+            sound:Destroy()
+            return nil
+        end
+    end
+    
+    sound:Play()
+    return sound
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- MAIN TRANSFORMATION EFFECT
+-- ═══════════════════════════════════════════════════════════════
+
+local function playUltimateTransformation(character, isLocalPlayer)
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+    
+    local container = Instance.new("Model")
+    container.Name = "TransformationEffect"
+    container.Parent = workspace
+    
+    local groundPos = getGroundPosition(character)
+    if not groundPos then
+        groundPos = rootPart.Position - Vector3.new(0, 3, 0)
+    end
+    
+    -- Create all systems
+    local auraSystem = createAuraSystem(character, container)
+    local groundCracks = createGroundCracks(groundPos, container)
+    local debrisSystem = createDebrisSystem(groundPos, container)
+    local energyRings = createEnergyRings(groundPos, container)
+    local lightningSystem = createLightningSystem(groundPos, character, container)
+    local particleTornado = createParticleTornado(groundPos, container)
+    local explosionBurst = createExplosionBurst(groundPos, container)
+    local screenFlash = isLocalPlayer and createScreenFlash() or nil
+    
+    -- Play sound and store reference
+    local transformSound = playTransformSound(isLocalPlayer, character)
+    
+    local startTime = tick()
+    local peakTriggered = false
+    local soundFadeStarted = false
+    
+    local shakeTriggers = {
+        phase1 = false,
+        phase2 = false,
+        phase3 = false,
+        phase4 = false
+    }
+    
+    local connection
+    connection = RunService.Heartbeat:Connect(function()
+        local elapsed = tick() - startTime
+        local totalProgress = elapsed / CONFIG.TotalDuration
+        
+        -- Start fade out 0.5 seconds before end
+        if not soundFadeStarted and elapsed >= (CONFIG.TotalDuration - CONFIG.SoundFadeOutTime) and transformSound then
+            soundFadeStarted = true
+            fadeOutAndStopSound(transformSound, CONFIG.SoundFadeOutTime)
+        end
+        
+        if elapsed >= CONFIG.TotalDuration then
+            connection:Disconnect()
+            stopCameraShake()
+            
+            -- Ensure sound is stopped
+            if transformSound and transformSound.Parent then
+                transformSound:Stop()
+                transformSound:Destroy()
+            end
+            
+            container:Destroy()
+            if screenFlash then screenFlash.gui:Destroy() end
+            return
+        end
+        
+        -- Determine phase
+        local phase = 1
+        local phaseProgress = 0
+        
+        if elapsed < CONFIG.ChargeTime then
+            phase = 1
+            phaseProgress = elapsed / CONFIG.ChargeTime
+        elseif elapsed < CONFIG.ChargeTime + CONFIG.BuildupTime then
+            phase = 2
+            phaseProgress = (elapsed - CONFIG.ChargeTime) / CONFIG.BuildupTime
+        elseif elapsed < CONFIG.ChargeTime + CONFIG.BuildupTime + CONFIG.PeakTime then
+            phase = 3
+            phaseProgress = (elapsed - CONFIG.ChargeTime - CONFIG.BuildupTime) / CONFIG.PeakTime
+        else
+            phase = 4
+            phaseProgress = (elapsed - CONFIG.ChargeTime - CONFIG.BuildupTime - CONFIG.PeakTime) / CONFIG.FadeTime
+        end
+        
+        -- ═══════════════════════════════════════
+        -- PHASE 1: CHARGING
+        -- ═══════════════════════════════════════
+        if phase == 1 then
+            if auraSystem then
+                for _, layer in ipairs(auraSystem.layers) do
+                    layer.part.CFrame = auraSystem.rootPart.CFrame
+                    layer.part.Transparency = 1 - (phaseProgress * 0.7)
+                    
+                    if phaseProgress > 0.5 then
+                        layer.particle.Rate = 20 * (phaseProgress - 0.5) * 2
+                    end
+                end
+            end
+            
+            for _, crack in ipairs(groundCracks) do
+                crack.part.Transparency = 1 - phaseProgress * 0.5
+                crack.part.Size = Vector3.new(
+                    0.8,
+                    0.2,
+                    crack.maxLength * phaseProgress
+                )
+            end
+            
+            for _, ring in ipairs(energyRings) do
+                if phaseProgress > ring.startDelay then
+                    local ringProgress = (phaseProgress - ring.startDelay) / (1 - ring.startDelay)
+                    ring.part.Transparency = 1 - ringProgress * 0.6
+                    ring.part.Size = Vector3.new(0.3, 3 * ringProgress, 3 * ringProgress)
+                end
+            end
+            
+            if isLocalPlayer and phaseProgress > 0.7 and not shakeTriggers.phase1 then
+                shakeTriggers.phase1 = true
+                applyCameraShake(1.0, CONFIG.ChargeTime * 0.3)
+            end
+            
+        -- ═══════════════════════════════════════
+        -- PHASE 2: BUILDUP
+        -- ═══════════════════════════════════════
+        elseif phase == 2 then
+            if auraSystem then
+                for _, layer in ipairs(auraSystem.layers) do
+                    layer.part.CFrame = auraSystem.rootPart.CFrame
+                    
+                    local pulse = 1 + math.sin(elapsed * layer.pulseSpeed) * 0.15
+                    layer.part.Size = layer.baseSize * pulse
+                    layer.part.Transparency = 0.3 - phaseProgress * 0.1
+                    
+                    layer.particle.Rate = 50 + phaseProgress * 100
+                end
+            end
+            
+            for _, debris in ipairs(debrisSystem) do
+                debris.part.Transparency = 1 - phaseProgress * 0.8
+                
+                local currentY = debris.startPos.Y + (debris.targetHeight * phaseProgress)
+                debris.part.Position = Vector3.new(
+                    debris.part.Position.X,
+                    currentY,
+                    debris.part.Position.Z
+                )
+                
+                debris.part.CFrame = debris.part.CFrame * CFrame.Angles(
+                    debris.rotSpeed.X * 0.03,
+                    debris.rotSpeed.Y * 0.03,
+                    debris.rotSpeed.Z * 0.03
+                )
+            end
+            
+            for _, ring in ipairs(energyRings) do
+                ring.part.Transparency = 0.4 - phaseProgress * 0.2
+                local size = 3 + phaseProgress * 20
+                ring.part.Size = Vector3.new(0.3, size, size)
+            end
+            
+            for _, crack in ipairs(groundCracks) do
+                crack.part.Transparency = 0.5 - phaseProgress * 0.3
+            end
+            
+            for _, strike in ipairs(lightningSystem) do
+                strike.recreateTimer = strike.recreateTimer + RunService.Heartbeat:Wait()
+                
+                if strike.recreateTimer >= strike.recreateInterval then
+                    if strike.bolts then
+                        for _, bolt in ipairs(strike.bolts) do
+                            if bolt.part1 then bolt.part1:Destroy() end
+                            if bolt.part2 then bolt.part2:Destroy() end
+                        end
+                    end
+                    
+                    if math.random() > 0.5 then
+                        strike.bolts = createLightningBolt(
+                            strike.startPos,
+                            strike.endPos,
+                            container,
+                            CONFIG.LightningColor
+                        )
+                    end
+                    
+                    strike.recreateTimer = 0
+                end
+            end
+            
+            if particleTornado then
+                particleTornado.particle.Rate = 100 + phaseProgress * 150
+            end
+            
+            if isLocalPlayer and not shakeTriggers.phase2 then
+                shakeTriggers.phase2 = true
+                applyCameraShake(2.5, CONFIG.BuildupTime)
+            end
+            
+        -- ═══════════════════════════════════════
+        -- PHASE 3: PEAK EXPLOSION
+        -- ═══════════════════════════════════════
+        elseif phase == 3 then
+            if not peakTriggered then
+                peakTriggered = true
+                
+                if explosionBurst then
+                    explosionBurst.particle.Enabled = true
+                    task.delay(0.2, function()
+                        explosionBurst.particle.Enabled = false
+                    end)
+                end
+                
+                if screenFlash then
+                    TweenService:Create(screenFlash.frame, TweenInfo.new(0.1), {
+                        BackgroundTransparency = 0
+                    }):Play()
+                    
+                    task.delay(0.15, function()
+                        TweenService:Create(screenFlash.frame, TweenInfo.new(0.4), {
+                            BackgroundTransparency = 1
+                        }):Play()
+                    end)
+                end
+                
+                if isLocalPlayer then
+                    applyCameraShake(5.0, CONFIG.PeakTime)
+                end
+            end
+            
+            if auraSystem then
+                for _, layer in ipairs(auraSystem.layers) do
+                    layer.part.CFrame = auraSystem.rootPart.CFrame
+                    local megaPulse = 1 + math.sin(elapsed * 20) * 0.3
+                    layer.part.Size = layer.baseSize * megaPulse * 1.5
+                    layer.part.Transparency = 0.2
+                    layer.particle.Rate = 300
+                end
+            end
+            
+            for _, ring in ipairs(energyRings) do
+                local pulse = 1 + math.sin(elapsed * 15) * 0.2
+                local size = 23 * pulse
+                ring.part.Size = Vector3.new(0.3, size, size)
+                ring.part.Transparency = 0.2
+            end
+            
+            if particleTornado then
+                particleTornado.particle.Rate = 300
+            end
+            
+        -- ═══════════════════════════════════════
+        -- PHASE 4: STABILIZATION/FADE
+        -- ═══════════════════════════════════════
+        else
+            if isLocalPlayer and not shakeTriggers.phase4 then
+                shakeTriggers.phase4 = true
+                stopCameraShake()
+            end
+            
+            if auraSystem then
+                for _, layer in ipairs(auraSystem.layers) do
+                    layer.part.CFrame = auraSystem.rootPart.CFrame
+                    layer.part.Transparency = 0.2 + phaseProgress * 0.8
+                    layer.particle.Rate = 300 * (1 - phaseProgress)
+                end
+            end
+            
+            for _, ring in ipairs(energyRings) do
+                ring.part.Transparency = 0.2 + phaseProgress * 0.8
+            end
+            
+            for _, crack in ipairs(groundCracks) do
+                crack.part.Transparency = 0.2 + phaseProgress * 0.8
+            end
+            
+            for _, debris in ipairs(debrisSystem) do
+                local fallY = debris.startPos.Y + debris.targetHeight * (1 - phaseProgress * 0.5)
+                debris.part.Position = Vector3.new(
+                    debris.part.Position.X,
+                    fallY,
+                    debris.part.Position.Z
+                )
+                debris.part.Transparency = 0.2 + phaseProgress * 0.8
+            end
+            
+            if phaseProgress > 0.3 then
+                for _, strike in ipairs(lightningSystem) do
+                    if strike.bolts then
+                        for _, bolt in ipairs(strike.bolts) do
+                            if bolt.part1 then bolt.part1:Destroy() end
+                            if bolt.part2 then bolt.part2:Destroy() end
+                        end
+                    end
+                end
+            end
+            
+            if particleTornado and phaseProgress > 0.2 then
+                particleTornado.particle.Rate = 0
+            end
+        end
+    end)
+    
+    Debris:AddItem(container, CONFIG.TotalDuration + 3)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- EVENT CONNECTION
+-- ═══════════════════════════════════════════════════════════════
+
+if AvatarEffectEvent then
+    AvatarEffectEvent.OnClientEvent:Connect(function(targetPlayerId)
+        local targetPlayer = Players:GetPlayerByUserId(targetPlayerId)
+        if not targetPlayer or not targetPlayer.Character then return end
+        
+        local isLocal = (targetPlayer == LocalPlayer)
+        playUltimateTransformation(targetPlayer.Character, isLocal)
+    end)
+
+    print("✅ AVATAR TRANSFORMATION EFFECT LOADED!")
+else
+    warn("⚠️ AvatarEffectTrigger RemoteEvent not found!")
+end
