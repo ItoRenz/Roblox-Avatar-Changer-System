@@ -3,7 +3,7 @@
     AVATAR CHANGER SYSTEM - CLIENT SIDE
     ═══════════════════════════════════════════════════════════════
     Author: ItoRenz00
-    Description: Modern avatar selector UI
+    Description: Modern avatar selector UI with transformation effect
     Location: StarterPlayer > StarterPlayerScripts
     ═══════════════════════════════════════════════════════════════
 ]]
@@ -19,6 +19,8 @@ if not RemoteEvent then
     warn("❌ ChangeAvatar RemoteEvent tidak ditemukan!")
     return
 end
+
+local AvatarEffectEvent = ReplicatedStorage:WaitForChild("AvatarEffectTrigger", 10)
 
 local AvatarData = {Boy = {}, Girl = {}}
 local CurrentTab = "Boy"
@@ -709,6 +711,14 @@ if ApplyButton then
         if #avatarList == 0 then return end
         local selectedAvatar = avatarList[CurrentIndex]
         if selectedAvatar and selectedAvatar.UserId then
+            -- TRIGGER EFFECT BEFORE CHANGING AVATAR
+            if AvatarEffectEvent then
+                AvatarEffectEvent:FireServer()
+            end
+            
+            -- Wait for effect to start
+            task.wait(0.5)
+            
             changeAvatar(selectedAvatar.UserId)
             ApplyButton.Text = "✓ APPLIED"
             task.spawn(function()
@@ -739,7 +749,7 @@ if RefreshTitleEvent then
         local head = character:FindFirstChild("Head")
         if not head then return end
         
-        local billboardGui = head:FindFirstChild("TitleGui") or head:FindFirstChild("OverheadGui") or head:FindFirstChild("NameTag")
+        local billboardGui = head:FindFirstChild("TitleGui") or head:FindFirstChild("OverheadGui") or head:FindFirstChild("NameTag") or head:FindFirstChild("MainDisplay")
         
         if billboardGui and billboardGui:IsA("BillboardGui") then
             task.wait(0.3)
@@ -760,4 +770,5 @@ end
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 print("✅ AVATAR CHANGER CLIENT READY!")
 print("👤 Author: ItoRenz00")
+print("✨ Effect trigger support enabled!")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
