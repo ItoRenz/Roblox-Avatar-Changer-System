@@ -2,7 +2,7 @@
     ═══════════════════════════════════════════════════════════════
     AVATAR TRANSFORMATION EFFECT
     Author: ItoRenz
-    Description: Epic Transformation effect
+    Description: Epic Transformation Effect
     ═══════════════════════════════════════════════════════════════
 ]]
 
@@ -12,47 +12,55 @@ local TweenService = game:GetService("TweenService")
 local Debris = game:GetService("Debris")
 local RunService = game:GetService("RunService")
 local SoundService = game:GetService("SoundService")
+local ContextActionService = game:GetService("ContextActionService")
 
 local LocalPlayer = Players.LocalPlayer
 local AvatarEffectEvent = ReplicatedStorage:WaitForChild("AvatarEffectTrigger", 10)
 
 local CONFIG = {
-    -- Timing
     TotalDuration = 6,
     ChargeTime = 1.5,
     BuildupTime = 2.0,
     PeakTime = 0.8,
     FadeTime = 1.7,
-    
-    -- Colors
     PrimaryColor = Color3.fromRGB(100, 200, 255),
     SecondaryColor = Color3.fromRGB(255, 255, 255),
     AuraColor = Color3.fromRGB(150, 220, 255),
     LightningColor = Color3.fromRGB(200, 230, 255),
     ExplosionColor = Color3.fromRGB(255, 255, 255),
-    
-    -- Aura
     AuraSize = 7,
     AuraLayers = 4,
-    
-    -- Ground
     CrackCount = 16,
     DebrisCount = 20,
-    
-    -- Energy
     EnergyRingCount = 5,
     LightningBoltCount = 30,
     ParticleIntensity = 250,
-    
-    -- Camera
     ShakeMagnitude = 1.5,
     ShakeFrequency = 50,
-    
-    -- Audio
     SoundFadeOutTime = 0.5,
 }
 
 local TransformSoundId = "rbxassetid://113257119036898"
+
+-- ═══════════════════════════════════════════════════════════════
+-- MOVEMENT DISABLE SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+local function disableMovement(actionName, inputState, inputObject)
+    if inputState == Enum.UserInputState.Begin then
+        return Enum.ContextActionResult.Sink
+    end
+end
+
+local function blockCharacterMovement()
+    ContextActionService:BindAction("DisableMovement", disableMovement, false,
+        Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, 
+        Enum.KeyCode.Space, Enum.KeyCode.LeftShift)
+end
+
+local function unblockCharacterMovement()
+    ContextActionService:UnbindAction("DisableMovement")
+end
 
 -- ═══════════════════════════════════════════════════════════════
 -- UTILITY FUNCTIONS
@@ -594,6 +602,11 @@ local function playUltimateTransformation(character, isLocalPlayer)
     local rootPart = character:FindFirstChild("HumanoidRootPart")
     if not rootPart then return end
     
+    -- DISABLE MOVEMENT FOR LOCAL PLAYER
+    if isLocalPlayer then
+        blockCharacterMovement()
+    end
+    
     local container = Instance.new("Model")
     container.Name = "TransformationEffect"
     container.Parent = workspace
@@ -603,7 +616,6 @@ local function playUltimateTransformation(character, isLocalPlayer)
         groundPos = rootPart.Position - Vector3.new(0, 3, 0)
     end
     
-    -- Create all systems
     local auraSystem = createAuraSystem(character, container)
     local groundCracks = createGroundCracks(groundPos, container)
     local debrisSystem = createDebrisSystem(groundPos, container)
@@ -613,7 +625,6 @@ local function playUltimateTransformation(character, isLocalPlayer)
     local explosionBurst = createExplosionBurst(groundPos, container)
     local screenFlash = isLocalPlayer and createScreenFlash() or nil
     
-    -- Play sound and store reference
     local transformSound = playTransformSound(isLocalPlayer, character)
     
     local startTime = tick()
@@ -632,7 +643,6 @@ local function playUltimateTransformation(character, isLocalPlayer)
         local elapsed = tick() - startTime
         local totalProgress = elapsed / CONFIG.TotalDuration
         
-        -- Start fade out 0.5 seconds before end
         if not soundFadeStarted and elapsed >= (CONFIG.TotalDuration - CONFIG.SoundFadeOutTime) and transformSound then
             soundFadeStarted = true
             fadeOutAndStopSound(transformSound, CONFIG.SoundFadeOutTime)
@@ -642,7 +652,6 @@ local function playUltimateTransformation(character, isLocalPlayer)
             connection:Disconnect()
             stopCameraShake()
             
-            -- Ensure sound is stopped
             if transformSound and transformSound.Parent then
                 transformSound:Stop()
                 transformSound:Destroy()
@@ -650,10 +659,15 @@ local function playUltimateTransformation(character, isLocalPlayer)
             
             container:Destroy()
             if screenFlash then screenFlash.gui:Destroy() end
+            
+            -- RE-ENABLE MOVEMENT
+            if isLocalPlayer then
+                unblockCharacterMovement()
+            end
+            
             return
         end
         
-        -- Determine phase
         local phase = 1
         local phaseProgress = 0
         
@@ -671,9 +685,7 @@ local function playUltimateTransformation(character, isLocalPlayer)
             phaseProgress = (elapsed - CONFIG.ChargeTime - CONFIG.BuildupTime - CONFIG.PeakTime) / CONFIG.FadeTime
         end
         
-        -- ═══════════════════════════════════════
         -- PHASE 1: CHARGING
-        -- ═══════════════════════════════════════
         if phase == 1 then
             if auraSystem then
                 for _, layer in ipairs(auraSystem.layers) do
@@ -708,9 +720,7 @@ local function playUltimateTransformation(character, isLocalPlayer)
                 applyCameraShake(1.0, CONFIG.ChargeTime * 0.3)
             end
             
-        -- ═══════════════════════════════════════
         -- PHASE 2: BUILDUP
-        -- ═══════════════════════════════════════
         elseif phase == 2 then
             if auraSystem then
                 for _, layer in ipairs(auraSystem.layers) do
@@ -784,9 +794,7 @@ local function playUltimateTransformation(character, isLocalPlayer)
                 applyCameraShake(2.5, CONFIG.BuildupTime)
             end
             
-        -- ═══════════════════════════════════════
         -- PHASE 3: PEAK EXPLOSION
-        -- ═══════════════════════════════════════
         elseif phase == 3 then
             if not peakTriggered then
                 peakTriggered = true
@@ -836,9 +844,7 @@ local function playUltimateTransformation(character, isLocalPlayer)
                 particleTornado.particle.Rate = 300
             end
             
-        -- ═══════════════════════════════════════
         -- PHASE 4: STABILIZATION/FADE
-        -- ═══════════════════════════════════════
         else
             if isLocalPlayer and not shakeTriggers.phase4 then
                 shakeTriggers.phase4 = true
