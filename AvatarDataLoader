@@ -21,6 +21,8 @@ local AvatarData = {
     Boy = {
         "ItoRenz00",
         "NIIQRYB",
+        "crownboy36",
+        "Spartaa541",
         "HeiHeiHeeeeiiii",
         "bay220122",
         "Rexannn9",
@@ -71,6 +73,8 @@ local AvatarData = {
         "PrassReborn",
     },
     Girl = {
+        "AzzahhraaLvv",
+        "riskaaa20111",
         "indytzy",
         "bbyskyyy04",
         "nonpeisa",
@@ -123,8 +127,6 @@ local AvatarData = {
         "Silkymellaa",
         "aykikaa",
         "nawmii_21",
-        "AzzahhraaLvv",
-        "riskaaa20111",
     }
 }
 
