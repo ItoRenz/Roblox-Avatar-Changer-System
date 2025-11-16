@@ -3,7 +3,7 @@
     AVATAR CHANGER SYSTEM - SERVER SIDE
     ═══════════════════════════════════════════════════════════════
     Author: ItoRenz00
-    Description: Server-side avatar handler with effect support
+    Description: Server-side avatar handler with preloading & caching
     Location: ServerScriptService
     ═══════════════════════════════════════════════════════════════
 ]]
@@ -16,7 +16,11 @@ local COOLDOWN_TIME = 2
 local MAX_RETRY_ATTEMPTS = 3
 local RETRY_DELAY = 0.3
 local PBR_PRELOAD_DELAY = 0.5
-local DEBUG_MODE = false
+local DEBUG_MODE = false -- Set true untuk detailed logs
+local ENABLE_PRELOADING = true
+local PRELOAD_TIMEOUT = 120
+local WAIT_FOR_DATA_TIMEOUT = 60
+local SHOW_PRELOAD_PROGRESS = false -- Set true untuk progress updates
 
 -- ═══════════════════════════════════════════════════════════════
 -- REMOTE EVENTS SETUP
@@ -51,14 +55,42 @@ local Cooldowns = {}
 local SavedAvatars = {}
 local OriginalAvatars = {}
 
+local AvatarDescriptionCache = {}
+local AvatarAssetCache = {}
+local CacheStatus = {
+    isPreloading = false,
+    totalAvatars = 0,
+    loadedAvatars = 0,
+    failedAvatars = 0,
+    isReady = false,
+    startTime = 0,
+    endTime = 0
+}
+
 -- ═══════════════════════════════════════════════════════════════
 -- UTILITY FUNCTIONS
 -- ═══════════════════════════════════════════════════════════════
 
 local function debugLog(...)
     if DEBUG_MODE then
-        print(...)
+        print("[AvatarChanger]", ...)
     end
+end
+
+local function getRigType(character)
+    if not character then return nil end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return nil end
+    return humanoid.RigType
+end
+
+local function getRigTypeName(rigType)
+    if rigType == Enum.HumanoidRigType.R6 then
+        return "R6"
+    elseif rigType == Enum.HumanoidRigType.R15 then
+        return "R15"
+    end
+    return "Unknown"
 end
 
 local function isOnCooldown(playerId)
@@ -106,6 +138,261 @@ local function isAvatarAllowed(userId)
 end
 
 -- ═══════════════════════════════════════════════════════════════
+-- WAIT FOR AVATAR DATA
+-- ═══════════════════════════════════════════════════════════════
+
+local function waitForAvatarData()
+    local AvatarStorage = ReplicatedStorage:WaitForChild("AvatarStorage", WAIT_FOR_DATA_TIMEOUT)
+    if not AvatarStorage then
+        warn("❌ AvatarStorage not found!")
+        return false
+    end
+    
+    local DataReady = AvatarStorage:WaitForChild("DataReady", WAIT_FOR_DATA_TIMEOUT)
+    if not DataReady then
+        warn("❌ DataReady flag not found!")
+        return false
+    end
+    
+    local startWait = tick()
+    while not DataReady.Value and (tick() - startWait) < WAIT_FOR_DATA_TIMEOUT do
+        task.wait(0.1)
+    end
+    
+    if not DataReady.Value then
+        warn("❌ AvatarDataLoader timeout!")
+        return false
+    end
+    
+    debugLog("✅ AvatarData is ready!")
+    return true
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- CACHE & PRELOADING SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+local function getAllAvatarUserIds()
+    local userIds = {}
+    local AvatarStorage = ReplicatedStorage:FindFirstChild("AvatarStorage")
+    if not AvatarStorage then return userIds end
+    
+    local BoyFolder = AvatarStorage:FindFirstChild("Boy")
+    local GirlFolder = AvatarStorage:FindFirstChild("Girl")
+    
+    if BoyFolder then
+        for _, value in ipairs(BoyFolder:GetChildren()) do
+            if value:IsA("IntValue") and value.Value > 0 then
+                table.insert(userIds, {
+                    userId = value.Value,
+                    username = value.Name,
+                    category = "Boy"
+                })
+            end
+        end
+    end
+    
+    if GirlFolder then
+        for _, value in ipairs(GirlFolder:GetChildren()) do
+            if value:IsA("IntValue") and value.Value > 0 then
+                table.insert(userIds, {
+                    userId = value.Value,
+                    username = value.Name,
+                    category = "Girl"
+                })
+            end
+        end
+    end
+    
+    return userIds
+end
+
+local function getAvatarAssets(description)
+    if not description then return {} end
+    
+    local assets = {}
+    
+    local assetProperties = {
+        "Face", "Head", "Torso", "LeftArm", "RightArm", "LeftLeg", "RightLeg",
+        "HatAccessory", "HairAccessory", "FaceAccessory", "NeckAccessory",
+        "ShoulderAccessory", "FrontAccessory", "BackAccessory", "WaistAccessory",
+        "ClimbAnimation", "FallAnimation", "IdleAnimation", "JumpAnimation",
+        "RunAnimation", "SwimAnimation", "WalkAnimation"
+    }
+    
+    for _, prop in ipairs(assetProperties) do
+        local success, value = pcall(function()
+            return description[prop]
+        end)
+        
+        if success and value then
+            if typeof(value) == "string" and value ~= "" then
+                table.insert(assets, value)
+            elseif typeof(value) == "number" and value > 0 then
+                table.insert(assets, "rbxassetid://" .. value)
+            end
+        end
+    end
+    
+    return assets
+end
+
+local function preloadAvatarDescription(userId, username)
+    if AvatarDescriptionCache[userId] then
+        debugLog("Cache hit:", username)
+        return AvatarDescriptionCache[userId]
+    end
+    
+    local description = nil
+    local lastError = nil
+    
+    for attempt = 1, MAX_RETRY_ATTEMPTS do
+        local success, result = pcall(function()
+            return Players:GetHumanoidDescriptionFromUserId(userId)
+        end)
+        
+        if success and result then
+            description = result
+            break
+        else
+            lastError = result
+            if attempt < MAX_RETRY_ATTEMPTS then
+                task.wait(RETRY_DELAY)
+            end
+        end
+    end
+    
+    if description then
+        AvatarDescriptionCache[userId] = description
+        local assets = getAvatarAssets(description)
+        AvatarAssetCache[userId] = assets
+        debugLog("Cached:", username, "-", #assets, "assets")
+        return description
+    else
+        if DEBUG_MODE then
+            warn("Failed to preload:", username, lastError)
+        end
+        return nil
+    end
+end
+
+local function preloadAvatarAssets(userId, username)
+    local assets = AvatarAssetCache[userId]
+    if not assets or #assets == 0 then
+        return false
+    end
+    
+    local success, err = pcall(function()
+        ContentProvider:PreloadAsync(assets)
+    end)
+    
+    if success then
+        debugLog("Preloaded assets:", username)
+        return true
+    else
+        if DEBUG_MODE then
+            warn("Asset preload failed:", username, err)
+        end
+        return false
+    end
+end
+
+local function preloadAllAvatars()
+    if not ENABLE_PRELOADING then
+        CacheStatus.isReady = true
+        return
+    end
+    
+    CacheStatus.isPreloading = true
+    CacheStatus.startTime = tick()
+    
+    local avatarList = getAllAvatarUserIds()
+    CacheStatus.totalAvatars = #avatarList
+    
+    if #avatarList == 0 then
+        warn("⚠️ No avatars found in AvatarStorage!")
+        CacheStatus.isReady = true
+        CacheStatus.isPreloading = false
+        return
+    end
+    
+    if SHOW_PRELOAD_PROGRESS then
+        print("🔄 Preloading", #avatarList, "avatars...")
+    end
+    
+    local startTime = tick()
+    local loadedCount = 0
+    local failedCount = 0
+    
+    -- Phase 1: Preload descriptions
+    for i, data in ipairs(avatarList) do
+        if tick() - startTime > PRELOAD_TIMEOUT then
+            warn("⏰ Preload timeout!")
+            break
+        end
+        
+        local description = preloadAvatarDescription(data.userId, data.username)
+        
+        if description then
+            loadedCount = loadedCount + 1
+            CacheStatus.loadedAvatars = loadedCount
+        else
+            failedCount = failedCount + 1
+            CacheStatus.failedAvatars = failedCount
+        end
+        
+        if SHOW_PRELOAD_PROGRESS and (i % 20 == 0 or i == #avatarList) then
+            print(string.format("Progress: %d/%d", i, #avatarList))
+        end
+        
+        task.wait(0.05)
+    end
+    
+    -- Phase 2: Preload assets
+    local assetCount = 0
+    for userId, _ in pairs(AvatarDescriptionCache) do
+        local username = "Unknown"
+        for _, data in ipairs(avatarList) do
+            if data.userId == userId then
+                username = data.username
+                break
+            end
+        end
+        
+        if preloadAvatarAssets(userId, username) then
+            assetCount = assetCount + 1
+        end
+        task.wait(0.05)
+    end
+    
+    CacheStatus.endTime = tick()
+    local elapsed = CacheStatus.endTime - CacheStatus.startTime
+    
+    -- ONLY SHOW SUMMARY
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("✅ AVATAR CACHE READY")
+    print("👤 Author: ItoRenz00")
+    print("📦 Loaded:", loadedCount, "| Failed:", failedCount, "| Time:", string.format("%.1f", elapsed) .. "s")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    
+    CacheStatus.isReady = true
+    CacheStatus.isPreloading = false
+end
+
+local function getCachedDescription(userId)
+    return AvatarDescriptionCache[userId]
+end
+
+local function clearCache()
+    AvatarDescriptionCache = {}
+    AvatarAssetCache = {}
+    CacheStatus.loadedAvatars = 0
+    CacheStatus.failedAvatars = 0
+    CacheStatus.isReady = false
+    print("🧹 Avatar cache cleared")
+end
+
+-- ═══════════════════════════════════════════════════════════════
 -- AVATAR FUNCTIONS
 -- ═══════════════════════════════════════════════════════════════
 
@@ -128,9 +415,9 @@ local function preloadPBRTextures(character, playerName)
         end)
         
         if success then
-            debugLog("✅ PBR Textures preloaded for", playerName, "(" .. #surfaceAppearances .. " surfaces)")
-        else
-            warn("⚠️ Some PBR textures failed to preload for", playerName .. ":", err)
+            debugLog("PBR preloaded:", playerName, #surfaceAppearances, "surfaces")
+        elseif DEBUG_MODE then
+            warn("PBR preload failed:", playerName, err)
         end
     end
 end
@@ -156,39 +443,41 @@ local function saveOriginalAvatar(player)
     
     if success and description then
         OriginalAvatars[player.UserId] = description
-        debugLog("💾 Saved original avatar for", player.Name)
-    else
-        warn("❌ Failed to save original avatar for", player.Name)
+        debugLog("Saved original avatar:", player.Name)
     end
 end
 
 local function applyAvatar(player, userId, skipSave, isReset)
     if not player or not player.Parent then
-        warn("❌ Player tidak valid atau sudah leave")
         return false
     end
+    
     if not isValidUserId(userId) then
-        warn("❌ Invalid UserId:", userId, "dari player:", player.Name)
+        if DEBUG_MODE then
+            warn("Invalid UserId:", userId)
+        end
         return false
     end
+    
     local onCooldown, timeLeft = isOnCooldown(player.UserId)
     if onCooldown then
-        warn("⏳", player.Name, "masih cooldown", math.ceil(timeLeft), "detik")
         return false
     end
     
     if not isReset and not isAvatarAllowed(userId) and userId ~= player.UserId then
-        warn("❌ Unauthorized avatar request:", userId, "dari player:", player.Name)
+        if DEBUG_MODE then
+            warn("Unauthorized avatar:", userId)
+        end
         return false
     end
+    
     local character = player.Character
     if not character then
-        warn("❌ Character tidak ditemukan untuk:", player.Name)
         return false
     end
+    
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not humanoid then
-        warn("❌ Humanoid tidak ditemukan untuk:", player.Name)
         return false
     end
     
@@ -196,30 +485,35 @@ local function applyAvatar(player, userId, skipSave, isReset)
     
     if isReset and OriginalAvatars[player.UserId] then
         description = OriginalAvatars[player.UserId]
-        debugLog("🔄 Using saved original avatar for", player.Name)
+        debugLog("Reset avatar:", player.Name)
     else
-        local lastError = nil
-        for attempt = 1, MAX_RETRY_ATTEMPTS do
-            local success, result = pcall(function()
-                return Players:GetHumanoidDescriptionFromUserId(userId)
-            end)
-            if success and result then
-                description = result
-                break
-            else
-                lastError = result
-                if attempt < MAX_RETRY_ATTEMPTS then
-                    warn("⚠️ Attempt", attempt, "failed, retrying...")
-                    task.wait(RETRY_DELAY)
+        description = getCachedDescription(userId)
+        
+        if description then
+            debugLog("Cache load:", player.Name)
+        else
+            local lastError = nil
+            for attempt = 1, MAX_RETRY_ATTEMPTS do
+                local success, result = pcall(function()
+                    return Players:GetHumanoidDescriptionFromUserId(userId)
+                end)
+                if success and result then
+                    description = result
+                    AvatarDescriptionCache[userId] = description
+                    break
+                else
+                    lastError = result
+                    if attempt < MAX_RETRY_ATTEMPTS then
+                        task.wait(RETRY_DELAY)
+                    end
                 end
             end
-        end
-        if not description then
-            warn("❌ Gagal mendapatkan HumanoidDescription untuk UserId:", userId)
-            if lastError then
-                warn("Last error:", lastError)
+            if not description then
+                if DEBUG_MODE then
+                    warn("Failed to get description:", userId, lastError)
+                end
+                return false
             end
-            return false
         end
     end
     
@@ -233,8 +527,11 @@ local function applyAvatar(player, userId, skipSave, isReset)
         local success, error = pcall(function()
             humanoid:ApplyDescription(description)
         end)
+        
         if not success then
-            warn("❌ Gagal apply description:", error)
+            if DEBUG_MODE then
+                warn("Apply failed:", error)
+            end
             if rootPart then
                 rootPart.Anchored = originalAnchored
             end
@@ -242,9 +539,16 @@ local function applyAvatar(player, userId, skipSave, isReset)
         end
         
         task.wait(0.05)
-        pcall(function()
-            humanoid:BuildRigFromAttachments()
-        end)
+        
+        local currentRigType = getRigType(character)
+        if currentRigType then
+            if currentRigType == Enum.HumanoidRigType.R15 then
+                pcall(function()
+                    humanoid:BuildRigFromAttachments()
+                end)
+            end
+        end
+        
         if rootPart then
             rootPart.Anchored = originalAnchored
         end
@@ -252,13 +556,12 @@ local function applyAvatar(player, userId, skipSave, isReset)
         if not skipSave then
             if isReset then
                 SavedAvatars[player.UserId] = nil
-                debugLog("🔄 Cleared saved avatar for", player.Name)
             else
                 SavedAvatars[player.UserId] = userId
-                debugLog("💾 Saved avatar for", player.Name, "→", userId)
             end
         end
-        debugLog("✅ Avatar", player.Name, "berubah ke UserId:", userId)
+        
+        debugLog("Avatar changed:", player.Name)
         setCooldown(player.UserId)
         
         task.spawn(function()
@@ -269,10 +572,10 @@ local function applyAvatar(player, userId, skipSave, isReset)
         if RefreshTitleEvent then
             pcall(function()
                 RefreshTitleEvent:FireAllClients(player.UserId)
-                debugLog("🔄 Title refresh triggered for all players (changed player:", player.Name .. ")")
             end)
         end
     end)
+    
     return true
 end
 
@@ -283,7 +586,7 @@ local function setupRespawnHandler(player)
         
         local savedUserId = SavedAvatars[player.UserId]
         if savedUserId and savedUserId ~= player.UserId then
-            debugLog("🔄 Respawn detected for", player.Name, "→ Reapplying avatar:", savedUserId)
+            debugLog("Respawn reapply:", player.Name)
             task.spawn(function()
                 applyAvatar(player, savedUserId, true)
             end)
@@ -299,24 +602,18 @@ RemoteEvent.OnServerEvent:Connect(function(player, userId)
     if not player or not player.Parent then
         return
     end
-    debugLog("📨 Request dari", player.Name, "untuk UserId:", userId)
     
     local isReset = (userId == player.UserId)
-    local success = applyAvatar(player, userId, false, isReset)
-    if not success then
-        debugLog("❌ Request gagal untuk", player.Name)
-    end
+    applyAvatar(player, userId, false, isReset)
 end)
 
 AvatarEffectEvent.OnServerEvent:Connect(function(player)
     if not player or not player.Parent then return end
     AvatarEffectEvent:FireAllClients(player.UserId)
-    debugLog("✨ Avatar effect triggered for", player.Name)
 end)
 
 Players.PlayerAdded:Connect(function(player)
     setupRespawnHandler(player)
-    debugLog("👤 Setup respawn handler untuk:", player.Name)
     
     if player.Character then
         saveOriginalAvatar(player)
@@ -324,16 +621,9 @@ Players.PlayerAdded:Connect(function(player)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-    if Cooldowns[player.UserId] then
-        Cooldowns[player.UserId] = nil
-    end
-    if SavedAvatars[player.UserId] then
-        SavedAvatars[player.UserId] = nil
-    end
-    if OriginalAvatars[player.UserId] then
-        OriginalAvatars[player.UserId] = nil
-    end
-    debugLog("🧹 Cleaned up data untuk:", player.Name)
+    Cooldowns[player.UserId] = nil
+    SavedAvatars[player.UserId] = nil
+    OriginalAvatars[player.UserId] = nil
 end)
 
 -- ═══════════════════════════════════════════════════════════════
@@ -343,7 +633,6 @@ end)
 local function clearCooldown(playerId)
     if Cooldowns[playerId] then
         Cooldowns[playerId] = nil
-        if DEBUG_MODE then print("✅ Cooldown cleared untuk player ID:", playerId) end
         return true
     end
     return false
@@ -355,13 +644,12 @@ local function clearAllCooldowns()
         count = count + 1
     end
     Cooldowns = {}
-    if DEBUG_MODE then print("✅ Cleared", count, "cooldown(s)") end
+    print("Cleared", count, "cooldowns")
 end
 
 local function resetAvatar(playerId)
     if SavedAvatars[playerId] then
         SavedAvatars[playerId] = nil
-        if DEBUG_MODE then print("✅ Reset saved avatar untuk player ID:", playerId) end
         return true
     end
     return false
@@ -374,9 +662,21 @@ _G.AvatarChanger = {
     GetCooldowns = function() return Cooldowns end,
     GetSavedAvatars = function() return SavedAvatars end,
     GetOriginalAvatars = function() return OriginalAvatars end,
+    GetCacheStatus = function() return CacheStatus end,
+    GetCachedAvatars = function() return AvatarDescriptionCache end,
+    GetCachedAssets = function() return AvatarAssetCache end,
+    ClearCache = clearCache,
+    ReloadCache = function()
+        clearCache()
+        task.spawn(function()
+            if waitForAvatarData() then
+                preloadAllAvatars()
+            end
+        end)
+    end,
     SetDebugMode = function(enabled)
         DEBUG_MODE = enabled
-        print("🔧 Debug mode:", enabled and "ENABLED" or "DISABLED")
+        print("Debug mode:", enabled and "ON" or "OFF")
     end
 }
 
@@ -385,15 +685,16 @@ _G.AvatarChanger = {
 -- ═══════════════════════════════════════════════════════════════
 
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("✅ AVATAR CHANGER SERVER READY!")
+print("✅ AVATAR CHANGER SERVER READY")
 print("👤 Author: ItoRenz00")
+print("⚙️  Cooldown:", COOLDOWN_TIME .. "s | Cache:", ENABLE_PRELOADING and "ON" or "OFF")
 print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("⚙️  Cooldown Time:", COOLDOWN_TIME, "seconds")
-print("🔄 Max Retry:", MAX_RETRY_ATTEMPTS, "attempts")
-print("🔧 Debug Mode:", DEBUG_MODE and "ON" or "OFF")
-print("📡 RemoteEvent:", RemoteEvent:GetFullName())
-print("✨ Effect Event:", AvatarEffectEvent:GetFullName())
-print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-if not DEBUG_MODE then
-    print("💡 Tip: Set DEBUG_MODE = true untuk detailed logs")
-end
+
+task.spawn(function()
+    if waitForAvatarData() then
+        task.wait(1)
+        preloadAllAvatars()
+    else
+        warn("❌ Failed to load avatar data")
+    end
+end)
