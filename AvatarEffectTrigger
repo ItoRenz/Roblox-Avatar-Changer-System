@@ -1,8 +1,10 @@
 --[[
     ═══════════════════════════════════════════════════════════════
     AVATAR TRANSFORMATION EFFECT
-    Author: ItoRenz
+    ═══════════════════════════════════════════════════════════════
+    Author: ItoRenz00
     Description: Epic Transformation Effect
+    Location: StarterPlayer > StarterPlayerScripts
     ═══════════════════════════════════════════════════════════════
 ]]
 
@@ -16,6 +18,8 @@ local ContextActionService = game:GetService("ContextActionService")
 
 local LocalPlayer = Players.LocalPlayer
 local AvatarEffectEvent = ReplicatedStorage:WaitForChild("AvatarEffectTrigger", 10)
+
+local DEBUG_MODE = false -- Set true untuk detailed logs
 
 local CONFIG = {
     TotalDuration = 6,
@@ -43,8 +47,33 @@ local CONFIG = {
 local TransformSoundId = "rbxassetid://113257119036898"
 
 -- ═══════════════════════════════════════════════════════════════
--- MOVEMENT DISABLE SYSTEM
+-- UTILITY
 -- ═══════════════════════════════════════════════════════════════
+
+local function debugLog(...)
+    if DEBUG_MODE then
+        print("[TransformEffect]", ...)
+    end
+end
+
+local function isR6Character(character)
+    if not character then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        return humanoid.RigType == Enum.HumanoidRigType.R6
+    end
+    return false
+end
+
+local function getCharacterSizeMultiplier(character)
+    return isR6Character(character) and 0.75 or 1.0
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- MOVEMENT LOCK SYSTEM
+-- ═══════════════════════════════════════════════════════════════
+
+local activeMovementLocks = {}
 
 local function disableMovement(actionName, inputState, inputObject)
     if inputState == Enum.UserInputState.Begin then
@@ -52,18 +81,77 @@ local function disableMovement(actionName, inputState, inputObject)
     end
 end
 
-local function blockCharacterMovement()
-    ContextActionService:BindAction("DisableMovement", disableMovement, false,
-        Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, 
-        Enum.KeyCode.Space, Enum.KeyCode.LeftShift)
+local function blockCharacterMovement(character)
+    if not character then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    
+    if not humanoid or not rootPart then return end
+    
+    local lockId = tostring(character)
+    
+    activeMovementLocks[lockId] = {
+        humanoid = humanoid,
+        rootPart = rootPart,
+        originalWalkSpeed = humanoid.WalkSpeed,
+        originalJumpPower = humanoid.JumpPower,
+        originalJumpHeight = humanoid.JumpHeight,
+        originalAutoRotate = humanoid.AutoRotate,
+        originalRootPartAnchored = rootPart.Anchored,
+        originalRootPartCFrame = rootPart.CFrame,
+    }
+    
+    humanoid.WalkSpeed = 0
+    humanoid.JumpPower = 0
+    humanoid.JumpHeight = 0
+    humanoid.AutoRotate = false
+    rootPart.Anchored = true
+    
+    if character == LocalPlayer.Character then
+        ContextActionService:BindAction("DisableMovement_" .. lockId, disableMovement, false,
+            Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, 
+            Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.LeftControl)
+    end
+    
+    debugLog("Movement locked:", character.Name)
+    return lockId
 end
 
-local function unblockCharacterMovement()
-    ContextActionService:UnbindAction("DisableMovement")
+local function unblockCharacterMovement(lockId)
+    if not lockId or not activeMovementLocks[lockId] then return end
+    
+    local lockData = activeMovementLocks[lockId]
+    local humanoid = lockData.humanoid
+    local rootPart = lockData.rootPart
+    
+    if not humanoid or not humanoid.Parent then
+        activeMovementLocks[lockId] = nil
+        return
+    end
+    
+    if not rootPart or not rootPart.Parent then
+        activeMovementLocks[lockId] = nil
+        return
+    end
+    
+    humanoid.WalkSpeed = lockData.originalWalkSpeed
+    humanoid.JumpPower = lockData.originalJumpPower
+    humanoid.JumpHeight = lockData.originalJumpHeight
+    humanoid.AutoRotate = lockData.originalAutoRotate
+    rootPart.Anchored = lockData.originalRootPartAnchored
+    
+    local character = humanoid.Parent
+    if character == LocalPlayer.Character then
+        ContextActionService:UnbindAction("DisableMovement_" .. lockId)
+    end
+    
+    activeMovementLocks[lockId] = nil
+    debugLog("Movement unlocked:", character.Name)
 end
 
 -- ═══════════════════════════════════════════════════════════════
--- UTILITY FUNCTIONS
+-- HELPER FUNCTIONS
 -- ═══════════════════════════════════════════════════════════════
 
 local function getGroundPosition(character)
@@ -86,18 +174,6 @@ local function getGroundPosition(character)
     end
 end
 
-local function lerpColor(color1, color2, t)
-    return Color3.new(
-        color1.R + (color2.R - color1.R) * t,
-        color1.G + (color2.G - color1.G) * t,
-        color1.B + (color2.B - color1.B) * t
-    )
-end
-
--- ═══════════════════════════════════════════════════════════════
--- SOUND FADE OUT SYSTEM
--- ═══════════════════════════════════════════════════════════════
-
 local function fadeOutAndStopSound(sound, fadeTime)
     if not sound or not sound.Parent then return end
     
@@ -119,24 +195,25 @@ local function fadeOutAndStopSound(sound, fadeTime)
 end
 
 -- ═══════════════════════════════════════════════════════════════
--- AURA SYSTEM
+-- VISUAL EFFECTS
 -- ═══════════════════════════════════════════════════════════════
 
 local function createAuraSystem(character, container)
     local hrp = character:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
     
+    local sizeMultiplier = getCharacterSizeMultiplier(character)
     local auraLayers = {}
     
     for i = 1, CONFIG.AuraLayers do
-        local sizeMultiplier = 1 + (i - 1) * 0.4
+        local layerMultiplier = 1 + (i - 1) * 0.4
         
         local auraLayer = Instance.new("Part")
         auraLayer.Name = "AuraLayer" .. i
         auraLayer.Size = Vector3.new(
-            CONFIG.AuraSize * sizeMultiplier,
-            CONFIG.AuraSize * sizeMultiplier * 1.5,
-            CONFIG.AuraSize * sizeMultiplier
+            CONFIG.AuraSize * layerMultiplier * sizeMultiplier,
+            CONFIG.AuraSize * layerMultiplier * 1.5 * sizeMultiplier,
+            CONFIG.AuraSize * layerMultiplier * sizeMultiplier
         )
         auraLayer.Material = Enum.Material.Neon
         auraLayer.Color = i % 2 == 0 and CONFIG.PrimaryColor or CONFIG.SecondaryColor
@@ -155,7 +232,7 @@ local function createAuraSystem(character, container)
         })
         particle.Size = NumberSequence.new({
             NumberSequenceKeypoint.new(0, 0),
-            NumberSequenceKeypoint.new(0.3, 2),
+            NumberSequenceKeypoint.new(0.3, 2 * sizeMultiplier),
             NumberSequenceKeypoint.new(1, 0)
         })
         particle.Transparency = NumberSequence.new({
@@ -184,10 +261,6 @@ local function createAuraSystem(character, container)
         rootPart = hrp
     }
 end
-
--- ═══════════════════════════════════════════════════════════════
--- GROUND IMPACT
--- ═══════════════════════════════════════════════════════════════
 
 local function createGroundCracks(position, container)
     local cracks = {}
@@ -268,10 +341,6 @@ local function createDebrisSystem(position, container)
     return debrisList
 end
 
--- ═══════════════════════════════════════════════════════════════
--- ENERGY RINGS
--- ═══════════════════════════════════════════════════════════════
-
 local function createEnergyRings(position, container)
     local rings = {}
     
@@ -298,10 +367,6 @@ local function createEnergyRings(position, container)
     
     return rings
 end
-
--- ═══════════════════════════════════════════════════════════════
--- LIGHTNING SYSTEM
--- ═══════════════════════════════════════════════════════════════
 
 local function createLightningBolt(startPos, endPos, container, color)
     local distance = (endPos - startPos).Magnitude
@@ -397,10 +462,6 @@ local function createLightningSystem(position, character, container)
     return lightningStrikes
 end
 
--- ═══════════════════════════════════════════════════════════════
--- PARTICLE TORNADO
--- ═══════════════════════════════════════════════════════════════
-
 local function createParticleTornado(position, container)
     local tornado = Instance.new("Part")
     tornado.Name = "ParticleTornado"
@@ -445,10 +506,6 @@ local function createParticleTornado(position, container)
     }
 end
 
--- ═══════════════════════════════════════════════════════════════
--- EXPLOSION BURST
--- ═══════════════════════════════════════════════════════════════
-
 local function createExplosionBurst(position, container)
     local explosion = Instance.new("Part")
     explosion.Name = "ExplosionCenter"
@@ -485,10 +542,6 @@ local function createExplosionBurst(position, container)
         particle = particle
     }
 end
-
--- ═══════════════════════════════════════════════════════════════
--- SCREEN FLASH
--- ═══════════════════════════════════════════════════════════════
 
 local function createScreenFlash()
     if not LocalPlayer then return nil end
@@ -602,10 +655,7 @@ local function playUltimateTransformation(character, isLocalPlayer)
     local rootPart = character:FindFirstChild("HumanoidRootPart")
     if not rootPart then return end
     
-    -- DISABLE MOVEMENT FOR LOCAL PLAYER
-    if isLocalPlayer then
-        blockCharacterMovement()
-    end
+    local movementLockId = blockCharacterMovement(character)
     
     local container = Instance.new("Model")
     container.Name = "TransformationEffect"
@@ -660,9 +710,8 @@ local function playUltimateTransformation(character, isLocalPlayer)
             container:Destroy()
             if screenFlash then screenFlash.gui:Destroy() end
             
-            -- RE-ENABLE MOVEMENT
-            if isLocalPlayer then
-                unblockCharacterMovement()
+            if movementLockId then
+                unblockCharacterMovement(movementLockId)
             end
             
             return
@@ -910,7 +959,7 @@ if AvatarEffectEvent then
         playUltimateTransformation(targetPlayer.Character, isLocal)
     end)
 
-    print("✅ AVATAR TRANSFORMATION EFFECT LOADED!")
+    print("✅ Avatar Transformation Effect Ready | Author: ItoRenz00")
 else
-    warn("⚠️ AvatarEffectTrigger RemoteEvent not found!")
+    warn("❌ AvatarEffectTrigger not found!")
 end
