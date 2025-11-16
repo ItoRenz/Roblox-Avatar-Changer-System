@@ -15,7 +15,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 -- CONFIGURATION
 -- ═══════════════════════════════════════════════════════════════
 
-local DEBUG_MODE = false
+local DEBUG_MODE = false -- Set true untuk detailed logs
+local SHOW_PROGRESS = false -- Set true untuk progress updates
 
 local AvatarData = {
     Boy = {
@@ -136,7 +137,7 @@ local AvatarData = {
 
 local function debugLog(...)
     if DEBUG_MODE then
-        print(...)
+        print("[AvatarDataLoader]", ...)
     end
 end
 
@@ -182,15 +183,15 @@ local function getUserIdFromUsername(username, retries)
 end
 
 local function loadAvatarData()
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("🔄 LOADING AVATAR DATA...")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    
     local totalLoaded = 0
     local totalFailed = 0
+    local failedUsers = {}
     local startTime = os.clock()
     
-    debugLog("👦 Loading Boy avatars...")
+    if SHOW_PROGRESS then
+        print("Loading Boy avatars...")
+    end
+    
     for i, username in ipairs(AvatarData.Boy) do
         local userId = getUserIdFromUsername(username)
         
@@ -200,16 +201,19 @@ local function loadAvatarData()
             value.Value = userId
             value.Parent = BoyFolder
             totalLoaded = totalLoaded + 1
-            debugLog("  ✅", i .. ".", username, "→", userId)
+            debugLog("✅", username, "→", userId)
         else
             totalFailed = totalFailed + 1
-            warn("  ❌", i .. ".", username, "FAILED")
+            table.insert(failedUsers, username)
         end
         
         task.wait(0.01)
     end
     
-    debugLog("👧 Loading Girl avatars...")
+    if SHOW_PROGRESS then
+        print("Loading Girl avatars...")
+    end
+    
     for i, username in ipairs(AvatarData.Girl) do
         local userId = getUserIdFromUsername(username)
         
@@ -219,10 +223,10 @@ local function loadAvatarData()
             value.Value = userId
             value.Parent = GirlFolder
             totalLoaded = totalLoaded + 1
-            debugLog("  ✅", i .. ".", username, "→", userId)
+            debugLog("✅", username, "→", userId)
         else
             totalFailed = totalFailed + 1
-            warn("  ❌", i .. ".", username, "FAILED")
+            table.insert(failedUsers, username)
         end
         
         task.wait(0.01)
@@ -235,18 +239,18 @@ local function loadAvatarData()
     ReadyFlag.Value = true
     ReadyFlag.Parent = AvatarStorage
     
+    -- ONLY SHOW SUMMARY
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("✅ AVATAR DATA LOADED!")
+    print("✅ AVATAR DATA LOADED")
     print("👤 Author: ItoRenz00")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("📊 Total Loaded:", totalLoaded)
-    print("❌ Total Failed:", totalFailed)
-    print("⏱️  Load Time:", loadTime, "seconds")
-    print("📁 Storage:", AvatarStorage:GetFullName())
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    if not DEBUG_MODE then
-        print("💡 Tip: Set DEBUG_MODE = true untuk detailed logs")
+    print("📊 Loaded:", totalLoaded, "| Failed:", totalFailed, "| Time:", loadTime .. "s")
+    
+    -- Show failed users only if any
+    if totalFailed > 0 and DEBUG_MODE then
+        warn("❌ Failed users:", table.concat(failedUsers, ", "))
     end
+    
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 end
 
 -- ═══════════════════════════════════════════════════════════════
