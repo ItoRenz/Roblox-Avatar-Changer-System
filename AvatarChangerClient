@@ -3,7 +3,7 @@
     AVATAR CHANGER SYSTEM - CLIENT SIDE
     ═══════════════════════════════════════════════════════════════
     Author: ItoRenz00
-    Description: Modern avatar selector UI with transformation effect
+    Description: Modern avatar selector UI with auto-close feature
     Location: StarterPlayer > StarterPlayerScripts
     ═══════════════════════════════════════════════════════════════
 ]]
@@ -14,9 +14,11 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Player = Players.LocalPlayer
 
+local DEBUG_MODE = false -- Set true untuk detailed logs
+
 local RemoteEvent = ReplicatedStorage:WaitForChild("ChangeAvatar", 10)
 if not RemoteEvent then
-    warn("❌ ChangeAvatar RemoteEvent tidak ditemukan!")
+    warn("❌ ChangeAvatar RemoteEvent not found!")
     return
 end
 
@@ -33,6 +35,9 @@ local isTweening = false
 local TWEEN_INFO = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
+local AUTO_CLOSE_ENABLED = true
+local AUTO_CLOSE_DELAY = 0.5
+
 local TAB_COLORS = {
     Boy = Color3.fromRGB(100, 150, 255),
     Girl = Color3.fromRGB(255, 100, 180)
@@ -41,6 +46,12 @@ local TAB_COLORS = {
 -- ═══════════════════════════════════════════════════════════════
 -- UTILITY FUNCTIONS
 -- ═══════════════════════════════════════════════════════════════
+
+local function debugLog(...)
+    if DEBUG_MODE then
+        print("[AvatarClient]", ...)
+    end
+end
 
 local function getCurrentAvatarList()
     return AvatarData[CurrentTab]
@@ -71,6 +82,7 @@ local function loadAvatarDataFromServer()
         end
     end
     
+    debugLog("Loaded avatars - Boy:", #AvatarData.Boy, "Girl:", #AvatarData.Girl)
     return true
 end
 
@@ -166,6 +178,7 @@ local function switchTab(screenGui, newTab)
     CurrentIndex = 1
     updatePreview(screenGui)
     updateTabVisuals(screenGui, newTab)
+    debugLog("Switched to:", newTab)
 end
 
 local function togglePanel(screenGui)
@@ -180,7 +193,7 @@ local function togglePanel(screenGui)
     local framePosTarget, togglePosTarget
     if isPanelOpen then
         framePosTarget = isMobile and UDim2.new(0, 8, 0, 68) or UDim2.new(0, 15, 0, 68)
-        togglePosTarget = isMobile and UDim2.new(0, 241, 0, 68) or UDim2.new(0, 358, 0, 68)
+        togglePosTarget = isMobile and UDim2.new(0, 241, 0, 68) or UDim2.new(0, 274, 0, 68)
         toggleButton.Text = "X"
         toggleButton.Font = Enum.Font.GothamBold
     else
@@ -199,6 +212,20 @@ local function togglePanel(screenGui)
     frameTween.Completed:Connect(function()
         isTweening = false
     end)
+    
+    debugLog("Panel:", isPanelOpen and "OPEN" or "CLOSED")
+end
+
+local function autoClosePanel(screenGui)
+    if not AUTO_CLOSE_ENABLED then return end
+    if not isPanelOpen then return end
+    
+    task.spawn(function()
+        task.wait(AUTO_CLOSE_DELAY)
+        if isPanelOpen and not isChanging then
+            togglePanel(screenGui)
+        end
+    end)
 end
 
 local function changeAvatar(userId)
@@ -206,6 +233,7 @@ local function changeAvatar(userId)
     if not userId then return end
     isChanging = true
     RemoteEvent:FireServer(userId)
+    debugLog("Avatar change request:", userId)
     task.spawn(function()
         task.wait(0.5)
         isChanging = false
@@ -216,6 +244,7 @@ local function resetAvatar()
     if isChanging then return end
     isChanging = true
     RemoteEvent:FireServer(Player.UserId)
+    debugLog("Avatar reset request")
     task.spawn(function()
         task.wait(0.5)
         isChanging = false
@@ -258,9 +287,12 @@ local function createUI()
     ToggleStroke.Thickness = 1.5
     ToggleStroke.Parent = ToggleButton
 
+    local panelWidth = isMobile and 230 or 256
+    local panelHeight = isMobile and 242 or 268
+
     local Frame = Instance.new("Frame")
     Frame.Name = "MainFrame"
-    Frame.Size = isMobile and UDim2.new(0, 230, 0, 242) or UDim2.new(0, 340, 0, 303)
+    Frame.Size = UDim2.new(0, panelWidth, 0, panelHeight)
     Frame.Position = isMobile and UDim2.new(-1, 8, 0, 68) or UDim2.new(-1, 15, 0, 68)
     Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
     Frame.BackgroundTransparency = 0.5
@@ -279,7 +311,7 @@ local function createUI()
     Stroke.Parent = Frame
 
     local TitleBar = Instance.new("Frame")
-    TitleBar.Size = UDim2.new(1, 0, 0, isMobile and 26 or 32)
+    TitleBar.Size = UDim2.new(1, 0, 0, isMobile and 26 or 30)
     TitleBar.BackgroundColor3 = Color3.fromRGB(5, 5, 10)
     TitleBar.BackgroundTransparency = 0.3
     TitleBar.BorderSizePixel = 0
@@ -303,15 +335,15 @@ local function createUI()
     Title.Text = "AVATAR SELECTOR"
     Title.TextColor3 = Color3.fromRGB(255, 255, 255)
     Title.Font = Enum.Font.GothamBold
-    Title.TextSize = isMobile and 9 or 12
+    Title.TextSize = isMobile and 9 or 11
     Title.TextXAlignment = Enum.TextXAlignment.Left
     Title.ZIndex = 2
     Title.Parent = TitleBar
 
     local TabContainer = Instance.new("Frame")
     TabContainer.Name = "TabContainer"
-    TabContainer.Size = UDim2.new(1, -16, 0, isMobile and 24 or 30)
-    TabContainer.Position = UDim2.new(0, 8, 0, isMobile and 30 or 36)
+    TabContainer.Size = UDim2.new(1, -16, 0, isMobile and 24 or 28)
+    TabContainer.Position = UDim2.new(0, 8, 0, isMobile and 30 or 34)
     TabContainer.BackgroundTransparency = 1
     TabContainer.BorderSizePixel = 0
     TabContainer.ZIndex = 3
@@ -327,7 +359,7 @@ local function createUI()
     BoyTab.Text = "BOY"
     BoyTab.TextColor3 = Color3.fromRGB(255, 255, 255)
     BoyTab.Font = Enum.Font.GothamBold
-    BoyTab.TextSize = isMobile and 8 or 11
+    BoyTab.TextSize = isMobile and 8 or 10
     BoyTab.AutoButtonColor = false
     BoyTab.ZIndex = 4
     BoyTab.Parent = TabContainer
@@ -353,7 +385,7 @@ local function createUI()
     GirlTab.Text = "GIRL"
     GirlTab.TextColor3 = Color3.fromRGB(200, 200, 200)
     GirlTab.Font = Enum.Font.GothamBold
-    GirlTab.TextSize = isMobile and 8 or 11
+    GirlTab.TextSize = isMobile and 8 or 10
     GirlTab.AutoButtonColor = false
     GirlTab.ZIndex = 4
     GirlTab.Parent = TabContainer
@@ -371,8 +403,8 @@ local function createUI()
 
     local LoadingContainer = Instance.new("Frame")
     LoadingContainer.Name = "LoadingContainer"
-    LoadingContainer.Size = UDim2.new(1, 0, 1, isMobile and -58 or -70)
-    LoadingContainer.Position = UDim2.new(0, 0, 0, isMobile and 58 or 70)
+    LoadingContainer.Size = UDim2.new(1, 0, 1, isMobile and -58 or -66)
+    LoadingContainer.Position = UDim2.new(0, 0, 0, isMobile and 58 or 66)
     LoadingContainer.BackgroundTransparency = 1
     LoadingContainer.BorderSizePixel = 0
     LoadingContainer.Visible = true
@@ -386,7 +418,7 @@ local function createUI()
     LoadingLabel.Text = "Loading Avatars..."
     LoadingLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
     LoadingLabel.Font = Enum.Font.GothamMedium
-    LoadingLabel.TextSize = isMobile and 10 or 13
+    LoadingLabel.TextSize = isMobile and 10 or 12
     LoadingLabel.ZIndex = 9
     LoadingLabel.Parent = LoadingContainer
 
@@ -397,14 +429,14 @@ local function createUI()
     LoadingSubtext.Text = "Please wait..."
     LoadingSubtext.TextColor3 = Color3.fromRGB(150, 150, 150)
     LoadingSubtext.Font = Enum.Font.Gotham
-    LoadingSubtext.TextSize = isMobile and 8 or 10
+    LoadingSubtext.TextSize = isMobile and 8 or 9
     LoadingSubtext.ZIndex = 9
     LoadingSubtext.Parent = LoadingContainer
 
     local Content = Instance.new("Frame")
     Content.Name = "Content"
-    Content.Size = UDim2.new(1, -16, 1, isMobile and -62 or -74)
-    Content.Position = UDim2.new(0, 8, 0, isMobile and 58 or 70)
+    Content.Size = UDim2.new(1, -16, 1, isMobile and -62 or -70)
+    Content.Position = UDim2.new(0, 8, 0, isMobile and 58 or 66)
     Content.BackgroundTransparency = 1
     Content.BorderSizePixel = 0
     Content.Visible = false
@@ -413,7 +445,7 @@ local function createUI()
 
     local PreviewContainer = Instance.new("Frame")
     PreviewContainer.Name = "PreviewContainer"
-    PreviewContainer.Size = UDim2.new(1, 0, 0, isMobile and 110 or 145)
+    PreviewContainer.Size = UDim2.new(1, 0, 0, isMobile and 110 or 125)
     PreviewContainer.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
     PreviewContainer.BackgroundTransparency = 0.5
     PreviewContainer.BorderSizePixel = 0
@@ -446,8 +478,8 @@ local function createUI()
 
     local CounterBadge = Instance.new("Frame")
     CounterBadge.Name = "CounterBadge"
-    CounterBadge.Size = UDim2.new(0, isMobile and 40 or 50, 0, isMobile and 18 or 24)
-    CounterBadge.Position = UDim2.new(1, isMobile and -44 or -54, 0, 5)
+    CounterBadge.Size = UDim2.new(0, isMobile and 40 or 46, 0, isMobile and 18 or 22)
+    CounterBadge.Position = UDim2.new(1, isMobile and -44 or -50, 0, 5)
     CounterBadge.BackgroundColor3 = TAB_COLORS.Boy
     CounterBadge.BackgroundTransparency = 0.5
     CounterBadge.BorderSizePixel = 0
@@ -472,16 +504,16 @@ local function createUI()
     CounterLabel.Text = "1/0"
     CounterLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
     CounterLabel.Font = Enum.Font.GothamBold
-    CounterLabel.TextSize = isMobile and 7 or 10
+    CounterLabel.TextSize = isMobile and 7 or 9
     CounterLabel.ZIndex = 9
     CounterLabel.Parent = CounterBadge
 
-    local buttonHeight = isMobile and 26 or 34
+    local buttonHeight = isMobile and 26 or 30
 
     local NavContainer = Instance.new("Frame")
     NavContainer.Name = "NavContainer"
     NavContainer.Size = UDim2.new(1, 0, 0, buttonHeight)
-    NavContainer.Position = UDim2.new(0, 0, 0, isMobile and 115 or 150)
+    NavContainer.Position = UDim2.new(0, 0, 0, isMobile and 115 or 130)
     NavContainer.BackgroundTransparency = 1
     NavContainer.BorderSizePixel = 0
     NavContainer.ZIndex = 6
@@ -497,7 +529,7 @@ local function createUI()
     PrevButton.Text = "← PREV"
     PrevButton.TextColor3 = Color3.fromRGB(255, 255, 255)
     PrevButton.Font = Enum.Font.GothamBold
-    PrevButton.TextSize = isMobile and 7 or 10
+    PrevButton.TextSize = isMobile and 7 or 9
     PrevButton.AutoButtonColor = false
     PrevButton.ZIndex = 7
     PrevButton.Parent = NavContainer
@@ -522,7 +554,7 @@ local function createUI()
     NextButton.Text = "NEXT →"
     NextButton.TextColor3 = Color3.fromRGB(255, 255, 255)
     NextButton.Font = Enum.Font.GothamBold
-    NextButton.TextSize = isMobile and 7 or 10
+    NextButton.TextSize = isMobile and 7 or 9
     NextButton.AutoButtonColor = false
     NextButton.ZIndex = 7
     NextButton.Parent = NavContainer
@@ -537,11 +569,11 @@ local function createUI()
     NextStroke.Thickness = 1
     NextStroke.Parent = NextButton
 
-    local actionButtonHeight = isMobile and 28 or 36
+    local actionButtonHeight = isMobile and 28 or 32
     local ActionContainer = Instance.new("Frame")
     ActionContainer.Name = "ActionContainer"
     ActionContainer.Size = UDim2.new(1, 0, 0, actionButtonHeight)
-    ActionContainer.Position = UDim2.new(0, 0, 0, isMobile and 146 or 189)
+    ActionContainer.Position = UDim2.new(0, 0, 0, isMobile and 146 or 165)
     ActionContainer.BackgroundTransparency = 1
     ActionContainer.BorderSizePixel = 0
     ActionContainer.ZIndex = 6
@@ -557,7 +589,7 @@ local function createUI()
     ResetButton.Text = "RESET"
     ResetButton.TextColor3 = Color3.fromRGB(255, 255, 255)
     ResetButton.Font = Enum.Font.GothamBold
-    ResetButton.TextSize = isMobile and 8 or 11
+    ResetButton.TextSize = isMobile and 8 or 10
     ResetButton.AutoButtonColor = false
     ResetButton.ZIndex = 7
     ResetButton.Parent = ActionContainer
@@ -583,7 +615,7 @@ local function createUI()
     ApplyButton.Text = "APPLY AVATAR"
     ApplyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
     ApplyButton.Font = Enum.Font.GothamBold
-    ApplyButton.TextSize = isMobile and 8 or 11
+    ApplyButton.TextSize = isMobile and 8 or 10
     ApplyButton.AutoButtonColor = false
     ApplyButton.ZIndex = 7
     ApplyButton.Parent = ActionContainer
@@ -610,7 +642,10 @@ local UI = createUI()
 
 task.spawn(function()
     local success = loadAvatarDataFromServer()
-    if not success then return end
+    if not success then 
+        warn("❌ Failed to load avatar data")
+        return 
+    end
     isLoading = false
     
     local frame = UI:FindFirstChild("MainFrame")
@@ -629,6 +664,8 @@ task.spawn(function()
 
     updatePreview(UI)
     updateTabVisuals(UI, CurrentTab)
+    
+    debugLog("UI initialized successfully")
 end)
 
 -- ═══════════════════════════════════════════════════════════════
@@ -700,6 +737,7 @@ if ResetButton then
         task.spawn(function()
             task.wait(1)
             ResetButton.Text = "RESET"
+            autoClosePanel(UI)
         end)
     end)
 end
@@ -711,12 +749,10 @@ if ApplyButton then
         if #avatarList == 0 then return end
         local selectedAvatar = avatarList[CurrentIndex]
         if selectedAvatar and selectedAvatar.UserId then
-            -- TRIGGER EFFECT BEFORE CHANGING AVATAR
             if AvatarEffectEvent then
                 AvatarEffectEvent:FireServer()
             end
             
-            -- Wait for effect to start
             task.wait(0.5)
             
             changeAvatar(selectedAvatar.UserId)
@@ -724,16 +760,14 @@ if ApplyButton then
             task.spawn(function()
                 task.wait(1)
                 ApplyButton.Text = "APPLY AVATAR"
-                if not isChanging then
-                    togglePanel(UI)
-                end
+                autoClosePanel(UI)
             end)
         end
     end)
 end
 
 -- ═══════════════════════════════════════════════════════════════
--- REFRESH TITLE EVENT LISTENER
+-- REFRESH TITLE EVENT
 -- ═══════════════════════════════════════════════════════════════
 
 local RefreshTitleEvent = ReplicatedStorage:WaitForChild("RefreshTitle", 10)
@@ -753,22 +787,12 @@ if RefreshTitleEvent then
         
         if billboardGui and billboardGui:IsA("BillboardGui") then
             task.wait(0.3)
-            
             billboardGui.Enabled = false
             task.wait(0.05)
             billboardGui.Enabled = true
-            
-            print("🔄 Refreshed title for:", changedPlayer.Name)
+            debugLog("Title refreshed:", changedPlayer.Name)
         end
     end)
-    
-    print("✅ RefreshTitle event listener connected!")
-else
-    warn("⚠️ RefreshTitle RemoteEvent not found!")
 end
 
-print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-print("✅ AVATAR CHANGER CLIENT READY!")
-print("👤 Author: ItoRenz00")
-print("✨ Effect trigger support enabled!")
-print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+print("✅ Avatar Changer Client Ready | Author: ItoRenz00")
